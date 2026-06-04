@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+swim_rota.db
+swim_rota.db-wal
+swim_rota.db-shm
+.secret
+.env
+.git/
+.claude/

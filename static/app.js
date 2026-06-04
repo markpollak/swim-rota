@@ -1,0 +1,1721 @@
+/* Arc Swim Rota — single-page PWA front end (vanilla JS).
+   Sections: api/state, helpers, login, shell+nav, views (home/calendar/myshifts/
+   approvals/reports/manage/profile), modals, boot. */
+"use strict";
+
+// ------------------------------------------------------------------ state/api
+const State = {
+  token: localStorage.getItem("swim_token") || null,
+  user: null,
+  roles: [],
+  levels: [],
+  lanes: 6,
+  serverDate: null,
+  view: "home",
+  // calendar
+  weekStart: null,
+  selectedDate: null,
+  calendarFilter: null,  // null = my-roles default; role_id = that role; 'all' = everything
+  calendarView: "day",   // "day" | "week"
+  // my shifts
+  myTab: "upcoming",
+  // admin
+  manageTab: "users",
+  reportTab: "outstanding",
+  rotaRole: null,        // role_id being built in rota builder
+  notifUnread: 0,
+  // messaging
+  activeChannel: null,   // channel id currently open
+  msgUnread: 0,          // badge count
+  _evtSource: null,      // SSE EventSource
+  _channels: [],         // cached channel list
+};
+
+async function api(path, { method = "GET", body } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (State.token) headers.Authorization = "Bearer " + State.token;
+  const res = await fetch(path, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) {
+    logout(true);
+    throw new Error("Session expired — please sign in again.");
+  }
+  if (res.headers.get("content-type")?.includes("text/csv")) return res;
+  const data = res.status === 204 ? {} : await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "Something went wrong.");
+  return data;
+}
+
+// ------------------------------------------------------------------ helpers
+const $ = (sel, el = document) => el.querySelector(sel);
+const app = () => document.getElementById("app");
+const esc = (s) =>
+  String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function isoToday() { return State.serverDate || new Date().toISOString().slice(0, 10); }
+function parseISO(s) { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); }
+function toISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function mondayOf(d) { const x = new Date(d); const wd = (x.getDay() + 6) % 7; x.setDate(x.getDate() - wd); return x; }
+function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+function fmtDate(iso) { const d = parseISO(iso); return `${DOW[(d.getDay() + 6) % 7]} ${d.getDate()} ${MON[d.getMonth()]}`; }
+function fmtLong(iso) { const d = parseISO(iso); return `${DOW[(d.getDay() + 6) % 7]} ${d.getDate()} ${MON[d.getMonth()]} ${d.getFullYear()}`; }
+
+let toastTimer;
+function toast(msg, kind = "") {
+  let t = document.getElementById("toast");
+  if (!t) { t = document.createElement("div"); t.id = "toast"; document.body.appendChild(t); }
+  t.className = kind; t.textContent = msg;
+  requestAnimationFrame(() => t.classList.add("show"));
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+function roleColor(roleId) { return State.roles.find((r) => r.id === roleId)?.color || "#26358B"; }
+function roleName(roleId) { return State.roles.find((r) => r.id === roleId)?.name || ""; }
+function userHasRole(roleId) { return State.user?.roles?.some((r) => r.id === roleId); }
+
+// ------------------------------------------------------------------ login
+function renderLogin(errMsg) {
+  app().innerHTML = `
+    <div class="login-wrap">
+      <div class="login-logo">
+        <img src="/static/icon-512.png" alt="Arc Swim Rota" />
+        <h1>Arc Swim Rota</h1>
+        <p>The Arc, Matlock · Freedom Leisure</p>
+      </div>
+      ${errMsg ? `<div class="banner danger">${esc(errMsg)}</div>` : ""}
+      <form id="loginForm" class="card stack">
+        <div class="field">
+          <label>Username</label>
+          <input id="lf-user" autocomplete="username" autocapitalize="none" placeholder="e.g. emma" required />
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input id="lf-pass" type="password" autocomplete="current-password" placeholder="Your password" required />
+        </div>
+        <button class="btn block" type="submit">Sign in</button>
+      </form>
+      <div class="demo-creds">
+        <strong>Demo logins</strong><br/>
+        Admin: <code>admin</code> / <code>admin123</code><br/>
+        Staff: <code>emma</code>, <code>james</code>, <code>grace</code>… / <code>password</code>
+      </div>
+    </div>`;
+  $("#loginForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = $("#loginForm button");
+    btn.disabled = true; btn.textContent = "Signing in…";
+    try {
+      const data = await api("/api/login", {
+        method: "POST",
+        body: { username: $("#lf-user").value, password: $("#lf-pass").value },
+      });
+      State.token = data.token;
+      localStorage.setItem("swim_token", data.token);
+      await boot();
+    } catch (err) {
+      renderLogin(err.message);
+    }
+  });
+}
+
+function logout(silent) {
+  disconnectSSE();
+  State.token = null; State.user = null;
+  localStorage.removeItem("swim_token");
+  if (!silent) renderLogin();
+  else renderLogin("Your session has expired. Please sign in again.");
+}
+
+// ------------------------------------------------------------------ SSE (live messages)
+function connectSSE() {
+  disconnectSSE();
+  if (!State.token) return;
+  const src = new EventSource(`/api/messages/stream?token=${encodeURIComponent(State.token)}`);
+  State._evtSource = src;
+  src.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      handleLiveMessage(msg);
+    } catch {}
+  };
+  src.onerror = () => {
+    // EventSource auto-reconnects; we just log in dev
+  };
+}
+
+function disconnectSSE() {
+  if (State._evtSource) { State._evtSource.close(); State._evtSource = null; }
+}
+
+function handleLiveMessage(msg) {
+  // Deleted message
+  if (msg.deleted) {
+    const bubble = document.querySelector(`[data-mid="${msg.id}"]`);
+    if (bubble) bubble.remove();
+    return;
+  }
+  // If the conversation is open for this channel, append the bubble
+  if (State.view === "messages" && State.activeChannel === msg.channel_id) {
+    appendBubble(msg);
+    scrollChatBottom();
+  } else {
+    // Badge on Messages nav for messages in other channels
+    if (msg.user_id !== State.user?.id) updateMsgBadge(1);
+  }
+  // Update channel list preview if visible
+  const preview = document.querySelector(`[data-ch-preview="${msg.channel_id}"]`);
+  if (preview && !msg.deleted) {
+    preview.textContent = msg.body.slice(0, 60);
+  }
+}
+
+// ------------------------------------------------------------------ shell
+const NAV = [
+  { id: "home",     icon: "🏠",  label: "Home" },
+  { id: "calendar", icon: "📅",  label: "Shifts" },
+  { id: "messages", icon: "💬",  label: "Messages" },
+  { id: "admin",    icon: "🛠️", label: "Admin", adminOnly: true },
+  { id: "profile",  icon: "👤",  label: "Me" },
+];
+
+function renderShell() {
+  const nav = NAV.filter((n) => !n.adminOnly || State.user.is_admin);
+  app().innerHTML = `
+    <header class="topbar">
+      <div class="logo"><img src="/static/icon-192.png" alt=""/> Arc Swim Rota</div>
+      <div class="spacer"></div>
+      <button class="iconbtn" id="notifBtn" aria-label="Notifications">🔔${
+        State.notifUnread ? `<span class="dot">${State.notifUnread}</span>` : ""
+      }</button>
+    </header>
+    <main class="app-main" id="screen"></main>
+    <nav class="bottomnav">
+      ${nav.map((n) => `
+        <button data-nav="${n.id}" class="${State.view === n.id ? "active" : ""}" style="position:relative">
+          <span class="ico">${n.icon}</span>${n.label}
+          ${n.id === "messages" && State.msgUnread ? `<span class="nav-badge">${State.msgUnread}</span>` : ""}
+        </button>`).join("")}
+    </nav>`;
+  app().querySelectorAll("[data-nav]").forEach((b) =>
+    b.addEventListener("click", () => go(b.dataset.nav)));
+  $("#notifBtn").addEventListener("click", openNotifications);
+  renderView();
+}
+
+function updateMsgBadge(delta) {
+  State.msgUnread = Math.max(0, (State.msgUnread || 0) + delta);
+  const btn = document.querySelector('[data-nav="messages"]');
+  if (!btn) return;
+  let badge = btn.querySelector(".nav-badge");
+  if (State.msgUnread > 0) {
+    if (!badge) { badge = document.createElement("span"); badge.className = "nav-badge"; btn.appendChild(badge); }
+    badge.textContent = State.msgUnread > 99 ? "99+" : State.msgUnread;
+  } else { badge?.remove(); }
+}
+
+function go(view) {
+  State.view = view;
+  app().querySelectorAll("[data-nav]").forEach((b) =>
+    b.classList.toggle("active", b.dataset.nav === view));
+  renderView();
+}
+
+function screen() { return document.getElementById("screen"); }
+function loading() { screen().innerHTML = `<div class="spinner"></div>`; }
+
+function renderView() {
+  switch (State.view) {
+    case "home":     return viewHome();
+    case "calendar": return viewCalendar();
+    case "myshifts": return viewMyShifts();
+    case "messages": return viewMessages();
+    case "admin":    return viewAdmin();
+    case "profile":  return viewProfile();
+  }
+}
+
+// ------------------------------------------------------------------ slot grouping + cards
+function groupSlots(slots) {
+  // group into class cards keyed by date|start|lane|level
+  const map = new Map();
+  for (const s of slots) {
+    const isDuty = s.level_id == null && s.lane == null;
+    const key = isDuty
+      ? `${s.date}|${s.start_time}|duty`
+      : `${s.date}|${s.start_time}|${s.lane}|${s.level_id}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        date: s.date, start: s.start_time, end: s.end_time,
+        lane: s.lane, level_id: s.level_id, level_name: s.level_name,
+        isDuty, slots: [],
+      });
+    }
+    map.get(key).slots.push(s);
+  }
+  return [...map.values()].sort((a, b) =>
+    a.start.localeCompare(b.start) || (a.lane || 0) - (b.lane || 0));
+}
+
+function statusPill(s) {
+  if (s.status === "approved") return `<span class="pill approved">✓ Approved</span>`;
+  if (s.status === "requested") return `<span class="pill requested">⏳ Pending</span>`;
+  return `<span class="pill open">Open</span>`;
+}
+
+function slotActions(s) {
+  const today = isoToday();
+  const mine = s.assigned_user_id === State.user.id;
+  const future = s.date >= today;
+  const acts = [];
+  if (s.status === "open" && future) {
+    if (userHasRole(s.role_id) || State.user.is_admin) {
+      acts.push(`<button class="btn green sm" data-act="request" data-id="${s.id}">Request</button>`);
+    }
+  }
+  if (mine && (s.status === "requested" || s.status === "approved") && future) {
+    const label = s.status === "requested" ? "Cancel" : "Release";
+    acts.push(`<button class="btn danger sm" data-act="release" data-id="${s.id}">${label}</button>`);
+  }
+  return acts.join("");
+}
+
+function classCard(g) {
+  const color = roleColor(g.slots[0].role_id);
+  const title = g.isDuty ? "Pool Lifeguard" : g.level_name;
+  const sub = g.isDuty ? "On duty — whole session" : `Lane ${g.lane}`;
+  const rows = g.slots.map((s) => `
+    <div class="slotrow">
+      <div class="who">
+        <span class="role" style="color:${roleColor(s.role_id)}">${esc(roleName(s.role_id))}</span>
+        ${s.assigned_name ? `· <span class="name">${esc(s.assigned_name)}</span>` : ""}
+      </div>
+      <div class="act">${statusPill(s)} ${slotActions(s)}</div>
+    </div>`).join("");
+  return `
+    <div class="classcard" style="border-left-color:${color}" data-card>
+      <div class="ch">
+        <div><span class="t">${esc(title)}</span> <span class="muted small">· ${esc(sub)}</span></div>
+        <span class="time">${g.start}–${g.end}</span>
+      </div>
+      ${rows}
+    </div>`;
+}
+
+function bindSlotActions(root) {
+  root.querySelectorAll("[data-act]").forEach((b) =>
+    b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = b.dataset.id, act = b.dataset.act;
+      b.disabled = true;
+      try {
+        if (act === "request") {
+          await api(`/api/slots/${id}/request`, { method: "POST" });
+          toast("Requested — awaiting approval", "ok");
+        } else if (act === "release") {
+          if (!confirm("Release this shift? It will become available for others.")) { b.disabled = false; return; }
+          await api(`/api/slots/${id}/release`, { method: "POST" });
+          toast("Shift released", "ok");
+        }
+        await refreshNotif();
+        renderView();
+      } catch (err) { toast(err.message, "err"); b.disabled = false; }
+    }));
+}
+
+// ------------------------------------------------------------------ HOME
+async function viewHome() {
+  loading();
+  const today = isoToday();
+  const weekEnd = toISO(addDays(parseISO(today), 13));
+  let mySlots = [], openCount = 0, pending = [];
+  try {
+    mySlots = await api(`/api/slots?mine=1&from=${today}&to=${weekEnd}`);
+    const open = await api(`/api/slots?status=open&from=${today}&to=${weekEnd}`);
+    openCount = open.filter((s) => userHasRole(s.role_id) || State.user.is_admin).length;
+    if (State.user.is_admin) pending = await api(`/api/slots?pending=1&from=${today}`);
+  } catch (err) { toast(err.message, "err"); }
+
+  const ts = State.user.training_status;
+  let trainingBanner = "";
+  if (ts === "expired" || ts === "missing")
+    trainingBanner = `<div class="banner danger">⚠️ Your lifeguard training is ${ts}. You can't be approved for lifeguard shifts until it's renewed. <a href="#" data-goto="profile">Update now</a></div>`;
+  else if (ts === "expiring")
+    trainingBanner = `<div class="banner warn">⏰ Your lifeguard training expires on ${fmtDate(State.user.training_expiry)} — please renew soon.</div>`;
+
+  const upcoming = mySlots.filter((s) => s.status !== "open")
+    .sort((a, b) => (a.date + a.start_time).localeCompare(b.date + b.start_time)).slice(0, 5);
+
+  screen().innerHTML = `
+    <h1 class="section-title">Hi ${esc(State.user.full_name.split(" ")[0])} 👋</h1>
+    ${trainingBanner}
+    ${State.user.is_admin && pending.length ? `
+      <div class="banner info between">
+        <span>📋 ${pending.length} shift request${pending.length > 1 ? "s" : ""} awaiting approval.</span>
+        <a href="#" data-goto="admin">Review</a>
+      </div>` : ""}
+    <div class="grid2">
+      <div class="card center" data-goto="myshifts" style="cursor:pointer">
+        <div class="statnum">${upcoming.length}</div><div class="small muted">My upcoming shifts</div>
+      </div>
+      <div class="card center" data-goto="calendar" style="cursor:pointer">
+        <div class="statnum" style="color:var(--magenta)">${openCount}</div><div class="small muted">Open shifts I can grab</div>
+      </div>
+    </div>
+    <h2 class="section-title">My next shifts</h2>
+    ${upcoming.length ? `<div id="homeCards">${groupSlots(upcoming).map(classCard).join("")}</div>`
+      : `<div class="empty"><div class="big">🏊</div>No upcoming shifts yet.<br/><button class="btn sub sm" data-goto="calendar" style="margin-top:10px">Find open shifts</button></div>`}
+  `;
+  bindGoto(screen());
+  bindSlotActions(screen());
+}
+
+function bindGoto(root) {
+  root.querySelectorAll("[data-goto]").forEach((el) =>
+    el.addEventListener("click", (e) => { e.preventDefault(); go(el.dataset.goto); }));
+}
+
+// ------------------------------------------------------------------ CALENDAR filter helpers
+function applyCalendarFilter(slots) {
+  const u = State.user;
+  const f = State.calendarFilter;
+  // explicit role_id chip selected
+  if (typeof f === "number") return slots.filter((s) => s.role_id === f);
+  // "all" — admins default here, or non-admin explicitly chose it
+  if (f === "all" || u.is_admin) return slots;
+  // default (null) for non-admins: only roles they hold
+  const myRoleIds = new Set(u.roles.map((r) => r.id));
+  return slots.filter((s) => myRoleIds.has(s.role_id));
+}
+
+function renderFilterBar() {
+  const u = State.user;
+  const f = State.calendarFilter;
+  // Chips to show: for non-admins only their own roles; for admins all roles
+  const rolePool = u.is_admin ? State.roles : u.roles;
+  // Only bother showing the bar if there's something to filter between
+  if (!u.is_admin && u.roles.length < 2 && State.roles.length < 2) return "";
+  const chips = rolePool.map((r) => {
+    const active = f === r.id;
+    return `<button class="filterchip${active ? " active" : ""}" data-fid="${r.id}"
+        style="${active ? `background:${r.color};border-color:${r.color}` : `border-color:${r.color};color:${r.color}`}">
+        ${esc(r.name)}</button>`;
+  });
+  // "All" chip: for non-admins shows everything; for admins it's the default
+  const allActive = f === "all" || (u.is_admin && f === null);
+  chips.push(`<button class="filterchip${allActive ? " active" : ""}" data-fid="all">All roles</button>`);
+  // For non-admins also offer "My roles" (null default) chip when >1 role
+  if (!u.is_admin && u.roles.length > 1) {
+    const myActive = f === null;
+    chips.unshift(`<button class="filterchip${myActive ? " active" : ""}" data-fid="null">My roles</button>`);
+  }
+  return `<div class="filterbar" id="filterbar">${chips.join("")}</div>`;
+}
+
+async function viewCalendar() {
+  if (!State.weekStart) State.weekStart = mondayOf(parseISO(isoToday()));
+  if (!State.selectedDate) {
+    const t = isoToday();
+    const ws = toISO(State.weekStart);
+    const we = toISO(addDays(State.weekStart, 6));
+    State.selectedDate = t >= ws && t <= we ? t : ws;
+  }
+  const wsISO = toISO(State.weekStart);
+  const weDate = addDays(State.weekStart, 6);
+  const isDayView = State.calendarView !== "week";
+
+  screen().innerHTML = `
+    <div class="navrow">
+      <button id="prevWk">‹ Prev</button>
+      <strong>${fmtDate(wsISO).slice(4)} – ${fmtDate(toISO(weDate)).slice(4)}</strong>
+      <button id="nextWk">Next ›</button>
+    </div>
+    <div class="tabs" style="margin-bottom:0;background:var(--blue-soft);padding:4px;border-radius:12px">
+      <button id="viewDay" class="${isDayView ? "active" : ""}">Day</button>
+      <button id="viewWeek" class="${!isDayView ? "active" : ""}">Week</button>
+    </div>
+    ${isDayView ? `<div class="weekbar" id="weekbar"></div>${renderFilterBar()}` : ""}
+    <div id="dayBody"><div class="spinner"></div></div>`;
+
+  $("#prevWk").onclick = () => { State.weekStart = addDays(State.weekStart, -7); State.selectedDate = toISO(State.weekStart); viewCalendar(); };
+  $("#nextWk").onclick = () => { State.weekStart = addDays(State.weekStart, 7); State.selectedDate = toISO(State.weekStart); viewCalendar(); };
+  $("#viewDay").onclick = () => { State.calendarView = "day"; viewCalendar(); };
+  $("#viewWeek").onclick = () => { State.calendarView = "week"; viewCalendar(); };
+
+  if (isDayView) {
+    // bind filter chips
+    screen().querySelectorAll(".filterchip").forEach((b) =>
+      b.addEventListener("click", () => {
+        const v = b.dataset.fid;
+        State.calendarFilter = v === "all" ? "all" : v === "null" ? null : Number(v);
+        renderDayBody(State._cachedSlots || []);
+        screen().querySelectorAll(".filterchip").forEach((c) => {
+          const cv = c.dataset.fid;
+          const nowActive = cv === "all"
+            ? State.calendarFilter === "all" || (State.user.is_admin && State.calendarFilter === null)
+            : cv === "null" ? State.calendarFilter === null && !State.user.is_admin
+            : Number(cv) === State.calendarFilter;
+          c.classList.toggle("active", nowActive);
+          const roleObj = State.roles.find((r) => r.id === Number(cv));
+          if (roleObj) {
+            c.style.background = nowActive ? roleObj.color : "";
+            c.style.borderColor = roleObj.color;
+            c.style.color = nowActive ? "" : roleObj.color;
+          } else { c.style.background = ""; }
+        });
+      }));
+
+    const wb = $("#weekbar");
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(State.weekStart, i);
+      const iso = toISO(d);
+      const b = document.createElement("button");
+      b.className = (iso === State.selectedDate ? "active " : "") + (iso === isoToday() ? "today" : "");
+      b.innerHTML = `<span class="dow">${DOW[i]}</span><span class="dnum">${d.getDate()}</span>`;
+      b.addEventListener("click", () => { State.selectedDate = iso; viewCalendar(); });
+      wb.appendChild(b);
+    }
+
+    try {
+      const slots = await api(`/api/slots?from=${State.selectedDate}&to=${State.selectedDate}`);
+      State._cachedSlots = slots;
+      renderDayBody(slots);
+    } catch (err) { $("#dayBody").innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; }
+  } else {
+    // week view
+    try {
+      const weekSlots = await api(`/api/slots/week?date=${State.selectedDate}`);
+      renderWeekGrid(weekSlots);
+    } catch (err) { $("#dayBody").innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; }
+  }
+}
+
+// ------------------------------------------------------------------ WEEK TIMETABLE GRID
+function renderWeekGrid(allSlots) {
+  const body = $("#dayBody");
+  const today = isoToday();
+  const u = State.user;
+
+  // Apply role filter for week view too
+  const slots = applyCalendarFilter(allSlots);
+
+  // Collect all unique times that have content
+  const times = [...new Set(slots.map((s) => s.start_time))].sort();
+  if (!times.length) {
+    body.innerHTML = `<div class="empty"><div class="big">📭</div>No shifts this week matching your filter.</div>`;
+    return;
+  }
+
+  // Build map: time → isoDate → [slots]
+  const map = {};
+  for (const s of slots) {
+    if (!map[s.start_time]) map[s.start_time] = {};
+    if (!map[s.start_time][s.date]) map[s.start_time][s.date] = [];
+    map[s.start_time][s.date].push(s);
+  }
+
+  // Days in this week (only those that have at least one slot)
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(State.weekStart, i);
+    const iso = toISO(d);
+    if (slots.some((s) => s.date === iso)) days.push({ iso, d, dow: DOW[i] });
+  }
+
+  // Determine if lifeguard slots are visible — group them specially
+  const lgRoleId = State.roles.find((r) => r.name === "Lifeguard")?.id;
+
+  const headerCells = days.map((day) => {
+    const isToday = day.iso === today;
+    return `<th class="wg-th${isToday ? " wg-today" : ""}">${day.dow}<br/><span class="wg-dnum">${day.d.getDate()}</span></th>`;
+  }).join("");
+
+  const rows = times.map((time) => {
+    const endTime = slots.find((s) => s.start_time === time)?.end_time || "";
+    const cells = days.map((day) => {
+      const daySlots = map[time]?.[day.iso] || [];
+      if (!daySlots.length) return `<td class="wg-cell wg-empty"></td>`;
+
+      // Group by class (level+lane) or lifeguard duty
+      const groups = {};
+      for (const s of daySlots) {
+        const isDuty = !s.level_id && !s.lane;
+        const key = isDuty ? "__duty__" : `${s.level_id}_${s.lane}`;
+        if (!groups[key]) groups[key] = { isDuty, level_name: s.level_name, lane: s.lane, slots: [] };
+        groups[key].slots.push(s);
+      }
+
+      const pills = Object.values(groups).map((g) => {
+        if (g.isDuty) {
+          const approved = g.slots.filter((s) => s.status === "approved").length;
+          const total = g.slots.length;
+          const ok = approved >= total;
+          const mine = g.slots.some((s) => s.assigned_user_id === u.id);
+          const cls = ok ? "wg-pill-ok" : approved > 0 ? "wg-pill-partial" : "wg-pill-open";
+          return `<div class="wg-pill ${cls}${mine ? " wg-mine" : ""}">🛟 ${approved}/${total}</div>`;
+        }
+        const assignedSlot = g.slots.find((s) => s.assigned_user_id && s.status === "approved");
+        const pendingSlot = g.slots.find((s) => s.status === "requested");
+        const mine = g.slots.some((s) => s.assigned_user_id === u.id);
+        const isOpen = g.slots.every((s) => s.status === "open");
+        const cls = assignedSlot ? "wg-pill-ok" : pendingSlot ? "wg-pill-pending" : "wg-pill-open";
+        const shortName = (g.level_name || "").replace("Parents & Toddlers", "P&T").replace("Level ", "L");
+        const who = assignedSlot ? ` · ${assignedSlot.assigned_name?.split(" ")[0]}` : pendingSlot ? " · ⏳" : "";
+        const laneStr = g.lane ? ` L${g.lane}` : "";
+        return `<div class="wg-pill ${cls}${mine ? " wg-mine" : ""}">${esc(shortName)}${laneStr}${esc(who)}</div>`;
+      }).join("");
+
+      return `<td class="wg-cell" data-date="${day.iso}" data-time="${time}">${pills}</td>`;
+    }).join("");
+
+    return `<tr><td class="wg-time">${time}<span class="wg-end">${endTime}</span></td>${cells}</tr>`;
+  }).join("");
+
+  body.innerHTML = `
+    <div class="wg-hint">
+      <span class="wg-legend wg-pill-ok">Covered</span>
+      <span class="wg-legend wg-pill-partial">Part cover</span>
+      <span class="wg-legend wg-pill-pending">Pending</span>
+      <span class="wg-legend wg-pill-open">Open</span>
+      ${u.id ? `<span class="wg-legend wg-mine">Your shift</span>` : ""}
+    </div>
+    <div class="wg-wrap">
+      <table class="wg-table">
+        <thead><tr><th class="wg-time-head"></th>${headerCells}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <p class="small muted" style="margin-top:8px">Tap a day in the weekbar to switch to the day view for that date.</p>`;
+
+  // clicking a cell switches to day view for that date
+  body.querySelectorAll("[data-date]").forEach((td) =>
+    td.addEventListener("click", () => {
+      State.selectedDate = td.dataset.date;
+      State.calendarView = "day";
+      viewCalendar();
+    }));
+}
+
+function renderDayBody(allSlots) {
+  const slots = applyCalendarFilter(allSlots);
+  const body = $("#dayBody");
+  const addBtn = State.user.is_admin
+    ? `<button class="btn sub sm" id="addSlotBtn">＋ Add shift</button>` : "";
+
+  const openForMe = allSlots.filter((s) =>
+    s.status === "open" && s.date >= isoToday() && userHasRole(s.role_id)).length;
+  const hintHtml = (!State.user.is_admin && openForMe > 0)
+    ? `<div class="open-hint">🟢 ${openForMe} open shift${openForMe > 1 ? "s" : ""} available for you today — tap <strong>Request</strong> to claim one.</div>`
+    : "";
+
+  if (!slots.length) {
+    const reason = allSlots.length && slots.length === 0 ? "No shifts match the selected filter." : `No classes scheduled for ${fmtDate(State.selectedDate)}.`;
+    body.innerHTML = `${hintHtml}<div class="empty"><div class="big">📭</div>${reason}<br/>${addBtn}</div>`;
+  } else {
+    body.innerHTML = `${hintHtml}<div class="between" style="margin-bottom:4px">
+        <div class="day-head" style="margin:0">${fmtLong(State.selectedDate)}</div>
+        ${addBtn}
+      </div>` +
+      groupSlots(slots).map(classCard).join("");
+    bindSlotActions(body);
+  }
+  if (State.user.is_admin) {
+    $("#addSlotBtn")?.addEventListener("click", () => addSlotSheet(State.selectedDate));
+  }
+}
+
+function addSlotSheet(date) {
+  const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  const levelOpts = State.levels.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
+  const roleOpts = State.roles.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
+  const laneOpts = `<option value="">No lane (pool duty)</option>` +
+    Array.from({length: State.lanes}, (_, i) => `<option value="${i+1}">Lane ${i+1}</option>`).join("");
+  const sheet = openSheet(`
+    <h2>Add shift</h2>
+    <p class="small muted">${fmtLong(date)}</p>
+    <div class="stack" style="margin-top:14px">
+      <div class="field"><label>Class / level</label>
+        <select id="as-level"><option value="">Pool duty (lifeguard)</option>${levelOpts}</select></div>
+      <div class="field"><label>Lane</label><select id="as-lane">${laneOpts}</select></div>
+      <div class="field"><label>Role</label><select id="as-role">${roleOpts}</select></div>
+      <div class="row">
+        <div class="field" style="flex:1"><label>Start time</label>
+          <input id="as-start" type="time" value="16:00" step="1800"/></div>
+        <div class="field" style="flex:1"><label>End time</label>
+          <input id="as-end" type="time" value="16:30" step="1800"/></div>
+      </div>
+      <div class="field"><label>Label (optional)</label>
+        <input id="as-label" placeholder="e.g. Squad training"/></div>
+      <div class="field"><label>Notes (optional)</label>
+        <input id="as-notes" placeholder="Anything admins should know"/></div>
+      <div class="field" id="as-repeat-wrap">
+        <label class="checkrow" id="as-repeat-row">
+          <input type="checkbox" id="as-repeat"/>
+          Also add to the <strong>weekly recurring template</strong> (generates this slot every week on this day)
+        </label>
+      </div>
+      <button class="btn block" id="as-save">Add shift</button>
+    </div>`);
+
+  // auto-set label when level changes
+  $("#as-level").addEventListener("change", () => {
+    const sel = $("#as-level");
+    const name = sel.options[sel.selectedIndex].text;
+    if (!$("#as-label").value) $("#as-label").value = name !== "Pool duty (lifeguard)" ? name : "";
+  });
+  // toggle lane based on level
+  $("#as-level").addEventListener("change", () => {
+    const isPoolDuty = !$("#as-level").value;
+    $("#as-lane").value = isPoolDuty ? "" : ($("#as-lane").value || "1");
+  });
+  // checkrow toggle
+  $("#as-repeat").addEventListener("change", (e) =>
+    e.target.closest(".checkrow").classList.toggle("on", e.target.checked));
+
+  $("#as-save").addEventListener("click", async () => {
+    const levelId = $("#as-level").value || null;
+    const laneVal = $("#as-lane").value || null;
+    const roleId = parseInt($("#as-role").value);
+    const startTime = $("#as-start").value;
+    const endTime = $("#as-end").value;
+    const label = $("#as-label").value.trim() || null;
+    const notes = $("#as-notes").value.trim() || null;
+    const addToTemplate = $("#as-repeat").checked;
+
+    if (!startTime || !endTime || startTime >= endTime)
+      return toast("Set valid start and end times", "err");
+
+    try {
+      // create the one-off slot
+      await api("/api/slots", { method: "POST", body: {
+        date, start_time: startTime, end_time: endTime,
+        level_id: levelId ? parseInt(levelId) : null,
+        lane: laneVal ? parseInt(laneVal) : null,
+        role_id: roleId, label, notes,
+      }});
+
+      if (addToTemplate) {
+        const d = parseISO(date);
+        const weekday = (d.getDay() + 6) % 7;
+        await api("/api/templates", { method: "POST", body: {
+          weekday, start_time: startTime, end_time: endTime,
+          level_id: levelId ? parseInt(levelId) : null,
+          lane: laneVal ? parseInt(laneVal) : null,
+          role_id: roleId, count: 1, label,
+        }});
+        toast("Shift added + saved to weekly template", "ok");
+      } else {
+        toast("Shift added", "ok");
+      }
+      closeSheet();
+      viewCalendar();
+    } catch (err) { toast(err.message, "err"); }
+  });
+}
+
+// ------------------------------------------------------------------ MY SHIFTS
+async function viewMyShifts() {
+  loading();
+  let slots = [];
+  try { slots = await api(`/api/slots?mine=1`); } catch (err) { toast(err.message, "err"); }
+  const today = isoToday();
+  const upcoming = slots.filter((s) => s.date >= today).sort((a, b) => (a.date + a.start_time).localeCompare(b.date + b.start_time));
+  const past = slots.filter((s) => s.date < today).sort((a, b) => (b.date + b.start_time).localeCompare(a.date + a.start_time));
+  const list = State.myTab === "upcoming" ? upcoming : past;
+
+  screen().innerHTML = `
+    <h1 class="section-title">My shifts</h1>
+    <div class="tabs">
+      <button data-tab="upcoming" class="${State.myTab === "upcoming" ? "active" : ""}">Upcoming (${upcoming.length})</button>
+      <button data-tab="past" class="${State.myTab === "past" ? "active" : ""}">Past (${past.length})</button>
+    </div>
+    <div id="msBody">
+      ${list.length ? groupByDate(list) : `<div class="empty"><div class="big">🗓️</div>No ${State.myTab} shifts.</div>`}
+    </div>`;
+  screen().querySelectorAll("[data-tab]").forEach((b) =>
+    b.addEventListener("click", () => { State.myTab = b.dataset.tab; viewMyShifts(); }));
+  bindSlotActions(screen());
+}
+
+function groupByDate(slots) {
+  const byDate = {};
+  for (const s of slots) (byDate[s.date] ||= []).push(s);
+  return Object.keys(byDate).sort((a, b) => State.myTab === "past" ? b.localeCompare(a) : a.localeCompare(b))
+    .map((d) => `<div class="day-head">${fmtDate(d)} <span class="date">${d.split("-").reverse().join("/")}</span></div>` +
+      groupSlots(byDate[d]).map(classCard).join("")).join("");
+}
+
+// ------------------------------------------------------------------ ADMIN
+function viewAdmin() {
+  screen().innerHTML = `
+    <h1 class="section-title">Admin</h1>
+    <div class="tabs">
+      <button data-atab="approvals" class="active">Approvals</button>
+      <button data-atab="reports">Reports</button>
+      <button data-atab="manage">Manage</button>
+    </div>
+    <div id="adminBody"></div>`;
+  const tabs = screen().querySelectorAll("[data-atab]");
+  tabs.forEach((b) => b.addEventListener("click", () => {
+    tabs.forEach((x) => x.classList.toggle("active", x === b));
+    if (b.dataset.atab === "approvals") adminApprovals();
+    else if (b.dataset.atab === "reports") adminReports();
+    else adminManage();
+  }));
+  adminApprovals();
+}
+
+async function adminApprovals() {
+  const body = $("#adminBody"); body.innerHTML = `<div class="spinner"></div>`;
+  let pending = [];
+  try { pending = await api(`/api/slots?pending=1`); } catch (err) { toast(err.message, "err"); }
+  if (!pending.length) { body.innerHTML = `<div class="empty"><div class="big">✅</div>No requests waiting. All caught up!</div>`; return; }
+  body.innerHTML = pending.sort((a, b) => (a.date + a.start_time).localeCompare(b.date + b.start_time)).map((s) => `
+    <div class="card">
+      <div class="between">
+        <div>
+          <strong>${esc(s.assigned_name)}</strong> · <span style="color:${roleColor(s.role_id)}">${esc(roleName(s.role_id))}</span>
+          <div class="small muted">${fmtDate(s.date)} · ${s.start_time}–${s.end_time} · ${esc(s.level_name || "Pool duty")}${s.lane ? " · Lane " + s.lane : ""}</div>
+        </div>
+        <span class="pill requested">Pending</span>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn green sm" data-approve="${s.id}">Approve</button>
+        <button class="btn danger sm" data-reject="${s.id}">Decline</button>
+      </div>
+    </div>`).join("");
+  body.querySelectorAll("[data-approve]").forEach((b) => b.addEventListener("click", async () => {
+    b.disabled = true;
+    try { await api(`/api/slots/${b.dataset.approve}/approve`, { method: "POST" }); toast("Approved", "ok"); await refreshNotif(); adminApprovals(); }
+    catch (err) { toast(err.message, "err"); b.disabled = false; }
+  }));
+  body.querySelectorAll("[data-reject]").forEach((b) => b.addEventListener("click", async () => {
+    const reason = prompt("Reason for declining (optional):") ?? null;
+    if (reason === null && !confirm("Decline without a reason?")) return;
+    b.disabled = true;
+    try { await api(`/api/slots/${b.dataset.reject}/reject`, { method: "POST", body: { reason } }); toast("Declined", "ok"); adminApprovals(); }
+    catch (err) { toast(err.message, "err"); b.disabled = false; }
+  }));
+}
+
+async function adminReports() {
+  const body = $("#adminBody");
+  body.innerHTML = `
+    <div class="tabs" style="background:#fff;border:1px solid var(--line)">
+      <button data-rtab="outstanding" class="${State.reportTab === "outstanding" ? "active" : ""}">Outstanding</button>
+      <button data-rtab="coverage" class="${State.reportTab === "coverage" ? "active" : ""}">Coverage</button>
+      <button data-rtab="training" class="${State.reportTab === "training" ? "active" : ""}">Training</button>
+    </div>
+    <div id="reportBody"><div class="spinner"></div></div>`;
+  body.querySelectorAll("[data-rtab]").forEach((b) => b.addEventListener("click", () => {
+    State.reportTab = b.dataset.rtab; adminReports();
+  }));
+  if (State.reportTab === "outstanding") return reportOutstanding();
+  if (State.reportTab === "coverage") return reportCoverage();
+  return reportTraining();
+}
+
+async function reportOutstanding() {
+  const rb = $("#reportBody");
+  try {
+    const data = await api(`/api/reports/outstanding`);
+    const byDate = {};
+    for (const s of data.rows) (byDate[s.date] ||= []).push(s);
+    rb.innerHTML = `
+      <div class="between" style="margin-bottom:10px">
+        <span class="muted small">${data.count} unfilled position${data.count !== 1 ? "s" : ""} (next 4 weeks)</span>
+        <a class="btn sub sm" href="/api/reports/outstanding.csv" id="csvBtn">⬇ CSV</a>
+      </div>
+      ${data.count === 0 ? `<div class="empty"><div class="big">🎉</div>Every shift is approved!</div>` :
+        Object.keys(byDate).sort().map((d) => `
+          <div class="day-head">${fmtDate(d)}</div>
+          ${byDate[d].map((s) => `<div class="list-item">
+            <div><span style="color:${roleColor(s.role_id)};font-weight:700">${esc(roleName(s.role_id))}</span>
+              <div class="small muted">${s.start_time}–${s.end_time} · ${esc(s.level_name || "Pool duty")}${s.lane ? " · Lane " + s.lane : ""}</div></div>
+            ${s.status === "requested" ? `<span class="pill requested">Pending: ${esc(s.assigned_name)}</span>` : `<span class="pill open">Open</span>`}
+          </div>`).join("")}`).join("")}`;
+    // CSV needs auth header; intercept and download as blob
+    $("#csvBtn").addEventListener("click", async (e) => {
+      e.preventDefault();
+      const res = await api(`/api/reports/outstanding.csv`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = "outstanding_shifts.csv"; a.click();
+      URL.revokeObjectURL(url);
+    });
+  } catch (err) { rb.innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; }
+}
+
+async function reportCoverage() {
+  const rb = $("#reportBody");
+  try {
+    const data = await api(`/api/reports/coverage`);
+    if (!data.days.length) { rb.innerHTML = `<div class="empty">No scheduled shifts.</div>`; return; }
+    rb.innerHTML = data.days.map((d) => {
+      const pct = Math.round((d.approved / d.total) * 100);
+      const col = pct === 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)";
+      return `<div class="list-item">
+        <div><strong>${fmtDate(d.date)}</strong>
+          <div class="small muted">${d.approved}/${d.total} approved · ${d.requested} pending · ${d.open} open</div></div>
+        <div style="text-align:right"><div class="statnum" style="font-size:1.1rem;color:${col}">${pct}%</div></div>
+      </div>`;
+    }).join("");
+  } catch (err) { rb.innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; }
+}
+
+async function reportTraining() {
+  const rb = $("#reportBody");
+  try {
+    const data = await api(`/api/reports/training`);
+    rb.innerHTML = `<p class="small muted">Lifeguards must hold in-date training to be approved for lifeguard shifts.</p>` +
+      data.rows.map((u) => `<div class="list-item">
+        <div><strong>${esc(u.full_name)}</strong>
+          <div class="small muted">${u.training_expiry ? "Expires " + fmtDate(u.training_expiry) : "No expiry recorded"}</div></div>
+        <span class="pill ${u.status}">${u.status}</span>
+      </div>`).join("");
+  } catch (err) { rb.innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; }
+}
+
+// ---- manage (users / roles / levels / schedule)
+function adminManage() {
+  const body = $("#adminBody");
+  const tabs = ["users","roles","levels","rota","schedule"];
+  const labels = ["People","Roles","Classes","Rota Builder","Schedule"];
+  body.innerHTML = `
+    <div class="tabs" style="background:#fff;border:1px solid var(--line);flex-wrap:wrap">
+      ${tabs.map((t,i) => `<button data-mtab="${t}" class="${State.manageTab===t?"active":""}">${labels[i]}</button>`).join("")}
+    </div>
+    <div id="manageBody"><div class="spinner"></div></div>`;
+  body.querySelectorAll("[data-mtab]").forEach((b) => b.addEventListener("click", () => {
+    State.manageTab = b.dataset.mtab; adminManage();
+  }));
+  if (State.manageTab === "users") manageUsers();
+  else if (State.manageTab === "roles") manageRoles();
+  else if (State.manageTab === "levels") manageLevels();
+  else if (State.manageTab === "rota") rotaBuilder();
+  else manageSchedule();
+}
+
+// ------------------------------------------------------------------ ROTA BUILDER
+async function rotaBuilder() {
+  const mb = $("#manageBody");
+  mb.innerHTML = `<div class="spinner"></div>`;
+  const [users, allSlots] = await Promise.all([
+    api("/api/users"),
+    api(`/api/slots/week?date=${isoToday()}`),
+  ]);
+  State._rotaWeekStart = State._rotaWeekStart || mondayOf(parseISO(isoToday()));
+
+  // Which role tab is active?
+  if (!State.rotaRole) State.rotaRole = State.roles.find((r) => r.name === "Lifeguard")?.id || State.roles[0]?.id;
+  const roleObj = State.roles.find((r) => r.id === State.rotaRole);
+
+  const weekISO = toISO(State._rotaWeekStart);
+  const weekEnd = toISO(addDays(State._rotaWeekStart, 6));
+
+  let weekSlots;
+  try { weekSlots = await api(`/api/slots/week?date=${weekISO}`); }
+  catch { weekSlots = []; }
+
+  // Filter to active role
+  const roleSlots = weekSlots.filter((s) => s.role_id === State.rotaRole);
+
+  // Qualified staff for this role
+  const qualified = users.filter((u) =>
+    u.active !== false && u.roles.some((r) => r.id === State.rotaRole));
+
+  // Build time×day grid for this role
+  const times = [...new Set(roleSlots.map((s) => s.start_time))].sort();
+  const DAYS_FULL = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+
+  const roleTabsHtml = State.roles.map((r) =>
+    `<button class="filterchip${r.id === State.rotaRole ? " active" : ""}" data-rtab="${r.id}"
+      style="${r.id === State.rotaRole ? `background:${r.color};border-color:${r.color}` : `border-color:${r.color};color:${r.color}`}">${esc(r.name)}</button>`
+  ).join("");
+
+  mb.innerHTML = `
+    <p class="small muted">Pick a person, then tick the slots you want to assign them to. Assignments are approved immediately.</p>
+    <div class="filterbar" style="margin-bottom:10px">${roleTabsHtml}</div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="between">
+        <div class="field" style="margin:0;flex:1">
+          <label>Assign to</label>
+          <select id="rb-person">
+            <option value="">— choose a person —</option>
+            ${qualified.map((u) => `<option value="${u.id}">${esc(u.full_name)}</option>`).join("")}
+          </select>
+        </div>
+        <div style="display:flex;gap:6px;align-items:flex-end;padding-bottom:0">
+          <button class="btn sub sm" id="rb-prev">‹</button>
+          <span class="small" style="white-space:nowrap;padding:0 4px">${fmtDate(weekISO).slice(4)}–${fmtDate(weekEnd).slice(4)}</span>
+          <button class="btn sub sm" id="rb-next">›</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="rb-grid">
+      ${times.length === 0 ? `<div class="empty">No ${esc(roleObj?.name || "")} slots this week.</div>` : buildRotaGrid(roleSlots, times, State._rotaWeekStart)}
+    </div>
+
+    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn green" id="rb-apply" disabled>Assign selected slots</button>
+      <button class="btn ghost sm" id="rb-clearsel">Clear selection</button>
+      <span class="small muted" id="rb-selcount" style="align-self:center"></span>
+    </div>`;
+
+  // Role tab switching
+  mb.querySelectorAll("[data-rtab]").forEach((b) => b.addEventListener("click", () => {
+    State.rotaRole = Number(b.dataset.rtab); rotaBuilder();
+  }));
+
+  // Week nav
+  $("#rb-prev").onclick = () => { State._rotaWeekStart = addDays(State._rotaWeekStart, -7); rotaBuilder(); };
+  $("#rb-next").onclick = () => { State._rotaWeekStart = addDays(State._rotaWeekStart, 7); rotaBuilder(); };
+
+  // Person change — refresh grid to highlight their existing assignments
+  $("#rb-person").addEventListener("change", () => refreshRotaGrid(roleSlots, times, State._rotaWeekStart));
+
+  // Cell toggle
+  mb.querySelectorAll(".rb-cell[data-sid]").forEach((cell) =>
+    cell.addEventListener("click", () => {
+      if (cell.dataset.taken) return; // already assigned, can't re-take
+      cell.classList.toggle("rb-sel");
+      updateRotaCount();
+    }));
+
+  // Apply button
+  $("#rb-apply").addEventListener("click", async () => {
+    const uid = Number($("#rb-person").value);
+    if (!uid) return toast("Choose a person first", "err");
+    const ids = [...mb.querySelectorAll(".rb-sel[data-sid]")].map((c) => Number(c.dataset.sid));
+    if (!ids.length) return toast("Select some slots first", "err");
+    const btn = $("#rb-apply"); btn.disabled = true; btn.textContent = "Assigning…";
+    try {
+      const r = await api("/api/slots/bulk-assign", { method: "POST", body: { user_id: uid, slot_ids: ids, auto_approve: true } });
+      toast(`Assigned ${r.assigned} slot${r.assigned !== 1 ? "s" : ""}${r.skipped ? ` (${r.skipped} skipped)` : ""}`, "ok");
+      rotaBuilder();
+    } catch (err) { toast(err.message, "err"); btn.disabled = false; btn.textContent = "Assign selected slots"; }
+  });
+
+  $("#rb-clearsel").addEventListener("click", () => {
+    mb.querySelectorAll(".rb-sel").forEach((c) => c.classList.remove("rb-sel"));
+    updateRotaCount();
+  });
+}
+
+function buildRotaGrid(roleSlots, times, weekStart) {
+  const today = isoToday();
+  const DAYS_SHORT = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  const days = Array.from({length: 7}, (_, i) => {
+    const d = addDays(weekStart, i);
+    return { iso: toISO(d), label: DAYS_SHORT[i], num: d.getDate() };
+  });
+
+  // Only show days with content
+  const activeDays = days.filter((day) => roleSlots.some((s) => s.date === day.iso));
+  if (!activeDays.length) return `<div class="empty">No slots this week.</div>`;
+
+  const header = `<tr><th class="rg-time"></th>${activeDays.map((d) =>
+    `<th class="rg-th${d.iso === today ? " rg-today" : ""}">${d.label}<br/><span class="rg-dnum">${d.num}</span></th>`
+  ).join("")}</tr>`;
+
+  // Group slots: time × date → [slot, ...]
+  const slotMap = {};
+  for (const s of roleSlots) {
+    const k = `${s.start_time}|${s.date}`;
+    if (!slotMap[k]) slotMap[k] = [];
+    slotMap[k].push(s);
+  }
+
+  const bodyRows = times.map((time) => {
+    const cells = activeDays.map((day) => {
+      const key = `${time}|${day.iso}`;
+      const ss = slotMap[key] || [];
+      if (!ss.length) return `<td class="rg-cell rg-empty"></td>`;
+      return ss.map((s) => {
+        const isPast = day.iso < today;
+        const taken = s.status !== "open";
+        const name = s.assigned_name ? s.assigned_name.split(" ")[0] : null;
+        const cls = taken ? (s.status === "approved" ? "rg-taken-ok" : "rg-taken-pending") : isPast ? "rg-past" : "rg-open";
+        const label = s.level_name
+          ? (s.level_name.replace("Parents & Toddlers","P&T").replace("Level ","L") + (s.lane ? ` L${s.lane}` : ""))
+          : (name || "Open");
+        return `<td class="rg-cell"><div class="rb-cell ${cls}" data-sid="${s.id}"${taken ? ` data-taken="1" title="${name || s.status}"` : ""}>
+          ${taken ? esc(name || s.status) : "Open"}
+        </div></td>`;
+      }).join("");
+    }).join("");
+    return `<tr><td class="rg-time">${time}</td>${cells}</tr>`;
+  }).join("");
+
+  return `<div class="rg-scroll"><table class="rg-table"><thead>${header}</thead><tbody>${bodyRows}</tbody></table></div>
+    <div class="rg-legend">
+      <span class="rb-cell rg-taken-ok" style="display:inline-block;padding:2px 8px">Approved</span>
+      <span class="rb-cell rg-taken-pending" style="display:inline-block;padding:2px 8px">Pending</span>
+      <span class="rb-cell rg-open" style="display:inline-block;padding:2px 8px">Open</span>
+      <span class="rb-cell rg-sel" style="display:inline-block;padding:2px 8px">Selected</span>
+    </div>`;
+}
+
+function refreshRotaGrid(roleSlots, times, weekStart) {
+  // Just visually update the grid — highlight the selected person's existing slots
+  const uid = Number($("#rb-person")?.value);
+  document.querySelectorAll(".rb-cell[data-sid]").forEach((cell) => {
+    const slot = roleSlots.find((s) => s.id === Number(cell.dataset.sid));
+    if (!slot) return;
+    const isMine = slot.assigned_user_id === uid;
+    if (isMine && !cell.dataset.taken) cell.classList.add("rb-sel");
+  });
+  updateRotaCount();
+}
+
+function updateRotaCount() {
+  const sel = document.querySelectorAll(".rb-sel[data-sid]").length;
+  const el = document.getElementById("rb-selcount");
+  if (el) el.textContent = sel ? `${sel} slot${sel !== 1 ? "s" : ""} selected` : "";
+  const applyBtn = document.getElementById("rb-apply");
+  if (applyBtn) applyBtn.disabled = sel === 0;
+}
+
+async function manageUsers() {
+  const mb = $("#manageBody");
+  const users = await api("/api/users");
+  mb.innerHTML = `
+    <button class="btn block sub" id="addUser" style="margin-bottom:12px">＋ Add person</button>
+    ${users.map((u) => `
+      <div class="card" data-user="${u.id}" style="cursor:pointer">
+        <div class="between">
+          <div><strong>${esc(u.full_name)}</strong> ${u.is_admin ? `<span class="tag" style="background:var(--magenta)">Admin</span>` : ""}
+            <div class="small muted">@${esc(u.username)} · ${u.roles.map((r) => esc(r.name)).join(", ") || "no roles"}</div></div>
+          ${u.training_status !== "n/a" ? `<span class="pill ${u.training_status}">${u.training_status}</span>` : ""}
+        </div>
+      </div>`).join("")}`;
+  $("#addUser").addEventListener("click", () => userSheet(null));
+  mb.querySelectorAll("[data-user]").forEach((c) =>
+    c.addEventListener("click", () => userSheet(users.find((u) => u.id == c.dataset.user))));
+}
+
+async function manageRoles() {
+  const mb = $("#manageBody");
+  const roles = await api("/api/roles");
+  mb.innerHTML = `
+    <p class="small muted">Add poolside roles as your team grows (e.g. Assistant Teacher, Duty Manager).</p>
+    <button class="btn block sub" id="addRole" style="margin-bottom:12px">＋ Add role</button>
+    ${roles.map((r) => `<div class="list-item">
+      <div><span class="tag" style="background:${r.color}">${esc(r.name)}</span>
+        ${r.requires_training ? `<span class="small muted"> · requires in-date training</span>` : ""}</div>
+      <button class="btn sub sm" data-role="${r.id}">Edit</button>
+    </div>`).join("")}`;
+  $("#addRole").addEventListener("click", () => roleSheet(null));
+  mb.querySelectorAll("[data-role]").forEach((b) =>
+    b.addEventListener("click", () => roleSheet(roles.find((r) => r.id == b.dataset.role))));
+}
+
+async function manageLevels() {
+  const mb = $("#manageBody");
+  const [levels, staffing, roles] = await Promise.all([
+    api("/api/bootstrap").then((b) => b.levels), api("/api/staffing"), api("/api/roles"),
+  ]);
+  State.roles = roles;
+  mb.innerHTML = `
+    <p class="small muted">Each class has default staffing. e.g. Parents & Toddlers = 1 Teacher + 1 Assistant.</p>
+    <button class="btn block sub" id="addLevel" style="margin-bottom:12px">＋ Add class / level</button>
+    ${levels.map((l) => {
+      const st = staffing[l.id] || [];
+      const desc = st.map((s) => `${s.count}× ${roleName(s.role_id)}`).join(" + ") || "no staffing set";
+      return `<div class="card" data-level="${l.id}" style="cursor:pointer">
+        <div class="between"><strong>${esc(l.name)}</strong><span class="small muted">›</span></div>
+        <div class="small muted">${esc(desc)}</div></div>`;
+    }).join("")}`;
+  $("#addLevel").addEventListener("click", () => levelSheet(null, roles, {}));
+  mb.querySelectorAll("[data-level]").forEach((c) =>
+    c.addEventListener("click", () => levelSheet(
+      levels.find((l) => l.id == c.dataset.level), roles, staffing[c.dataset.level] || [])));
+}
+
+async function manageSchedule() {
+  const mb = $("#manageBody");
+  const templates = await api("/api/templates");
+  const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  const byDay = {};
+  for (const t of templates) (byDay[t.weekday] ||= []).push(t);
+
+  // collapse identical template rows (same time/level/lane) into a summary
+  const daySummaries = [0,1,2,3,4,5,6].filter((d) => byDay[d]).map((d) => {
+    const ts = byDay[d];
+    const classes = [...new Set(ts.filter((t) => t.level_name).map((t) => t.level_name))];
+    const times = [...new Set(ts.map((t) => t.start_time))].sort();
+    const firstTime = times[0] || "";
+    const lastSlot = ts.filter((t) => t.start_time === times[times.length-1])[0];
+    const lastEnd = lastSlot?.end_time || "";
+    return { d, ts, classes, firstTime, lastEnd };
+  });
+
+  mb.innerHTML = `
+    <div class="card">
+      <div class="between"><strong>Generate bookable shifts</strong></div>
+      <p class="small muted">Materialise slots from the weekly schedule below into the calendar. Safe to run repeatedly — never duplicates.</p>
+      <div class="row">
+        <select id="genWeeks" style="max-width:140px">
+          <option value="2">2 weeks</option><option value="4" selected>4 weeks</option>
+          <option value="6">6 weeks</option><option value="8">8 weeks</option>
+        </select>
+        <button class="btn" id="genBtn">Generate now</button>
+      </div>
+    </div>
+
+    <div class="between" style="margin:16px 2px 8px">
+      <h3 class="section-title" style="margin:0">Weekly schedule</h3>
+      <button class="btn sub sm" id="addTmplBtn">＋ Add recurring slot</button>
+    </div>
+
+    ${daySummaries.length ? daySummaries.map(({ d, ts, classes, firstTime, lastEnd }) => `
+      <div class="card" style="margin-bottom:10px">
+        <div class="between" style="margin-bottom:8px">
+          <strong>${DAYS[d]}</strong>
+          <span class="small muted">${firstTime}–${lastEnd} · ${ts.length} slots</span>
+        </div>
+        ${classes.length ? `<div class="chips" style="margin-bottom:10px">${
+          classes.map((c) => `<span class="tag" style="background:var(--blue)">${esc(c)}</span>`).join("")
+        }</div>` : `<div class="small muted" style="margin-bottom:8px">Pool duty / lifeguard only</div>`}
+        <details>
+          <summary class="small muted" style="cursor:pointer">Show all ${ts.length} template rows</summary>
+          <div style="margin-top:8px">
+            ${ts.map((t) => `
+              <div class="list-item" style="font-size:.82rem">
+                <div>
+                  <span style="color:${t.role_name === 'Lifeguard' ? 'var(--magenta)' : 'var(--blue)'}; font-weight:700">${esc(t.role_name)}</span>
+                  · ${esc(t.level_name || 'Pool duty')}${t.lane ? ` · Lane ${t.lane}` : ''}
+                  <div class="muted">${t.start_time}–${t.end_time} · ×${t.count}</div>
+                </div>
+                <button class="btn danger sm" data-del-tmpl="${t.id}">✕</button>
+              </div>`).join("")}
+          </div>
+        </details>
+      </div>`).join("") : `<div class="empty">No recurring templates defined yet.</div>`}
+
+    <p class="small muted" style="margin-top:8px">
+      ℹ️ Deleting a template only stops <em>new</em> slots being generated — existing booked shifts are unaffected.
+      After adding or deleting templates, click <strong>Generate now</strong> to update the calendar.
+    </p>`;
+
+  $("#genBtn").addEventListener("click", async () => {
+    const btn = $("#genBtn"); btn.disabled = true; btn.textContent = "Working…";
+    try {
+      const r = await api("/api/generate", { method: "POST", body: { weeks: Number($("#genWeeks").value) } });
+      toast(`Created ${r.created} new shifts`, "ok");
+    } catch (err) { toast(err.message, "err"); }
+    btn.disabled = false; btn.textContent = "Generate now";
+  });
+
+  $("#addTmplBtn").addEventListener("click", () => addTemplateSheet());
+
+  mb.querySelectorAll("[data-del-tmpl]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      if (!confirm("Remove this recurring slot from the template?\n\nExisting booked shifts on the calendar won't be affected.")) return;
+      b.disabled = true;
+      try {
+        await api(`/api/templates/${b.dataset.delTmpl}`, { method: "DELETE" });
+        toast("Template slot removed", "ok");
+        manageSchedule();
+      } catch (err) { toast(err.message, "err"); b.disabled = false; }
+    }));
+}
+
+function addTemplateSheet() {
+  const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  const dayOpts = DAYS.map((d, i) => `<option value="${i}">${d}</option>`).join("");
+  const levelOpts = State.levels.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
+  const roleOpts = State.roles.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
+  const laneOpts = `<option value="">No lane (pool duty)</option>` +
+    Array.from({length: State.lanes}, (_, i) => `<option value="${i+1}">Lane ${i+1}</option>`).join("");
+
+  openSheet(`
+    <h2>Add recurring slot</h2>
+    <p class="small muted">This adds a slot to the <strong>weekly template</strong>. It will appear every week on the chosen day. Click <em>Generate</em> afterwards to push it into the calendar.</p>
+    <div class="stack" style="margin-top:14px">
+      <div class="field"><label>Day of week</label><select id="tmpl-day">${dayOpts}</select></div>
+      <div class="field"><label>Class / level</label>
+        <select id="tmpl-level"><option value="">Pool duty (lifeguard)</option>${levelOpts}</select></div>
+      <div class="field"><label>Lane</label><select id="tmpl-lane">${laneOpts}</select></div>
+      <div class="field"><label>Role</label><select id="tmpl-role">${roleOpts}</select></div>
+      <div class="row">
+        <div class="field" style="flex:1"><label>Start time</label>
+          <input id="tmpl-start" type="time" value="16:00" step="1800"/></div>
+        <div class="field" style="flex:1"><label>End time</label>
+          <input id="tmpl-end" type="time" value="16:30" step="1800"/></div>
+      </div>
+      <div class="field"><label>How many of this role per slot</label>
+        <input id="tmpl-count" type="number" min="1" max="6" value="1" style="max-width:100px"/></div>
+      <div class="field"><label>Label (optional)</label>
+        <input id="tmpl-label" placeholder="e.g. Level 3 · Lane 2"/></div>
+      <button class="btn block" id="tmpl-save">Save recurring slot</button>
+    </div>`);
+
+  $("#tmpl-save").addEventListener("click", async () => {
+    const levelId = $("#tmpl-level").value || null;
+    const laneVal = $("#tmpl-lane").value || null;
+    const startTime = $("#tmpl-start").value;
+    const endTime = $("#tmpl-end").value;
+    if (!startTime || !endTime || startTime >= endTime)
+      return toast("Set valid start and end times", "err");
+    try {
+      await api("/api/templates", { method: "POST", body: {
+        weekday: parseInt($("#tmpl-day").value),
+        start_time: startTime, end_time: endTime,
+        level_id: levelId ? parseInt(levelId) : null,
+        lane: laneVal ? parseInt(laneVal) : null,
+        role_id: parseInt($("#tmpl-role").value),
+        count: parseInt($("#tmpl-count").value) || 1,
+        label: $("#tmpl-label").value.trim() || null,
+      }});
+      closeSheet();
+      toast("Recurring slot added — click Generate to push it to the calendar", "ok");
+      manageSchedule();
+    } catch (err) { toast(err.message, "err"); }
+  });
+}
+
+// ------------------------------------------------------------------ PROFILE
+async function viewProfile() {
+  const u = State.user;
+  const needsTraining = u.roles.some((r) => r.requires_training);
+  screen().innerHTML = `
+    <h1 class="section-title">My profile</h1>
+    <div class="card stack">
+      <div class="field"><label>Full name</label><input id="pf-name" value="${esc(u.full_name)}"/></div>
+      <div class="field"><label>Email</label><input id="pf-email" type="email" value="${esc(u.email || "")}"/></div>
+      <div class="field"><label>Phone</label><input id="pf-phone" value="${esc(u.phone || "")}"/></div>
+      ${needsTraining ? `
+        <div class="field"><label>Lifeguard training expiry ${
+          u.training_status !== "valid" && u.training_status !== "n/a"
+            ? `<span class="pill ${u.training_status}">${u.training_status}</span>` : ""}</label>
+          <input id="pf-train" type="date" value="${esc(u.training_expiry || "")}"/>
+          <p class="small muted" style="margin-top:6px">You must keep this in date to work lifeguard shifts.</p></div>` : ""}
+      <button class="btn block" id="pf-save">Save changes</button>
+    </div>
+    <div class="card stack">
+      <strong>Change password</strong>
+      <div class="field"><label>New password</label><input id="pf-pass" type="password" placeholder="Leave blank to keep current"/></div>
+      <button class="btn ghost block" id="pf-passbtn">Update password</button>
+    </div>
+    <div class="card">
+      <div class="between"><strong>My roles</strong><span class="muted small">set by admin</span></div>
+      <div class="chips" style="margin-top:10px">${u.roles.map((r) => `<span class="tag" style="background:${r.color}">${esc(r.name)}</span>`).join("") || `<span class="muted small">No roles assigned</span>`}</div>
+    </div>
+    <button class="btn danger block" id="pf-logout" style="margin-bottom:14px">Sign out</button>
+    <div class="center small muted" id="installArea"></div>`;
+
+  $("#pf-save").addEventListener("click", async () => {
+    try {
+      const body = { full_name: $("#pf-name").value, email: $("#pf-email").value, phone: $("#pf-phone").value };
+      if (needsTraining) body.training_expiry = $("#pf-train").value || null;
+      State.user = await api("/api/me", { method: "PATCH", body });
+      toast("Profile saved", "ok"); renderShell();
+    } catch (err) { toast(err.message, "err"); }
+  });
+  $("#pf-passbtn").addEventListener("click", async () => {
+    const pw = $("#pf-pass").value;
+    if (pw.length < 4) return toast("Password too short", "err");
+    try { await api("/api/me", { method: "PATCH", body: { password: pw } }); $("#pf-pass").value = ""; toast("Password updated", "ok"); }
+    catch (err) { toast(err.message, "err"); }
+  });
+  $("#pf-logout").addEventListener("click", () => { if (confirm("Sign out?")) logout(); });
+  renderInstall();
+}
+
+// ------------------------------------------------------------------ MESSAGES
+async function viewMessages() {
+  loading();
+  State.msgUnread = 0;
+  updateMsgBadge(0 - State.msgUnread);
+  try {
+    State._channels = await api("/api/channels");
+  } catch (err) { screen().innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; return; }
+
+  if (State.activeChannel) {
+    const ch = State._channels.find((c) => c.id === State.activeChannel);
+    if (ch) { openChannel(ch); return; }
+    State.activeChannel = null;
+  }
+  renderChannelList();
+}
+
+function renderChannelList() {
+  State.activeChannel = null;
+  const chs = State._channels;
+  screen().innerHTML = `
+    <div class="between" style="margin-bottom:14px">
+      <h1 class="section-title" style="margin:0">Messages</h1>
+      ${State.user.is_admin ? `<button class="btn sub sm" id="newChBtn">＋ New channel</button>` : ""}
+    </div>
+    ${!chs.length ? `<div class="empty"><div class="big">💬</div>You're not in any channels yet.<br/><span class="small muted">Ask an admin to add you.</span></div>` :
+      chs.map((ch) => `
+        <div class="ch-row" data-ch="${ch.id}">
+          <div class="ch-avatar" style="background:${ch.color}">${esc(ch.name[0])}</div>
+          <div class="ch-info">
+            <div class="between">
+              <strong>${esc(ch.name)}</strong>
+              <span class="small muted">${ch.member_count} member${ch.member_count !== 1 ? "s" : ""}</span>
+            </div>
+            <div class="ch-preview" data-ch-preview="${ch.id}">${ch.last_message
+              ? esc(ch.last_message.full_name.split(" ")[0] + ": " + ch.last_message.body.slice(0, 60))
+              : `<span class="muted">No messages yet</span>`}</div>
+          </div>
+        </div>`).join("")}
+    ${State.user.is_admin ? `<div class="divider"></div><button class="btn ghost block" id="manageChBtn" style="margin-top:4px">Manage channels</button>` : ""}
+  `;
+  screen().querySelectorAll("[data-ch]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const ch = chs.find((c) => c.id === Number(el.dataset.ch));
+      if (ch) openChannel(ch);
+    }));
+  $("#newChBtn")?.addEventListener("click", () => channelSheet(null));
+  $("#manageChBtn")?.addEventListener("click", () => adminChannels());
+}
+
+async function openChannel(ch) {
+  State.activeChannel = ch.id;
+  screen().innerHTML = `
+    <div class="chat-header">
+      <button class="btn sub sm" id="chatBack">‹ Back</button>
+      <div class="ch-avatar sm" style="background:${ch.color}">${esc(ch.name[0])}</div>
+      <div>
+        <strong>${esc(ch.name)}</strong>
+        <div class="small muted">${ch.member_count} member${ch.member_count !== 1 ? "s" : ""}</div>
+      </div>
+      ${State.user.is_admin ? `<button class="btn sub sm" style="margin-left:auto" id="chEditBtn">Edit</button>` : ""}
+    </div>
+    <div class="chat-body" id="chatBody"><div class="spinner"></div></div>
+    <div class="chat-input-bar">
+      <textarea id="chatInput" placeholder="Type a message…" rows="1"></textarea>
+      <button class="chat-send" id="chatSend" disabled>➤</button>
+    </div>`;
+
+  $("#chatBack").addEventListener("click", () => { State.activeChannel = null; renderChannelList(); });
+  $("#chEditBtn")?.addEventListener("click", () => channelSheet(ch));
+
+  const input = $("#chatInput");
+  const sendBtn = $("#chatSend");
+
+  // auto-resize textarea
+  input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 120) + "px";
+    sendBtn.disabled = !input.value.trim();
+  });
+
+  // send on Enter (Shift+Enter = newline)
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(ch.id, input, sendBtn); }
+  });
+  sendBtn.addEventListener("click", () => sendMessage(ch.id, input, sendBtn));
+
+  // load history
+  try {
+    const msgs = await api(`/api/channels/${ch.id}/messages`);
+    const body = $("#chatBody");
+    if (!msgs.length) {
+      body.innerHTML = `<div class="empty" style="padding:40px 20px"><div class="big">💬</div>Be the first to say something!</div>`;
+    } else {
+      body.innerHTML = "";
+      msgs.forEach((m) => appendBubble(m));
+      scrollChatBottom(true);
+    }
+  } catch (err) {
+    $("#chatBody").innerHTML = `<div class="banner danger">${esc(err.message)}</div>`;
+  }
+}
+
+function appendBubble(msg) {
+  const body = document.getElementById("chatBody");
+  if (!body) return;
+  const mine = msg.user_id === State.user?.id;
+  const time = new Date(msg.sent_at + (msg.sent_at.includes("Z") ? "" : "Z"))
+    .toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const div = document.createElement("div");
+  div.className = `bubble-wrap ${mine ? "mine" : "theirs"}`;
+  div.dataset.mid = msg.id;
+  div.innerHTML = `
+    ${!mine ? `<div class="bubble-name">${esc(msg.full_name)}</div>` : ""}
+    <div class="bubble">${esc(msg.body).replace(/\n/g, "<br/>")}</div>
+    <div class="bubble-time">${time}</div>`;
+  body.appendChild(div);
+}
+
+function scrollChatBottom(instant) {
+  const body = document.getElementById("chatBody");
+  if (body) body.scrollTo({ top: body.scrollHeight, behavior: instant ? "instant" : "smooth" });
+}
+
+async function sendMessage(channelId, input, btn) {
+  const body = input.value.trim();
+  if (!body) return;
+  btn.disabled = true;
+  input.value = "";
+  input.style.height = "auto";
+  try {
+    await api(`/api/channels/${channelId}/messages`, { method: "POST", body: { body } });
+    // SSE will deliver it back to us — we add the bubble there
+  } catch (err) { toast(err.message, "err"); input.value = body; }
+  btn.disabled = false;
+  input.focus();
+}
+
+// ---- admin channel management ----
+async function adminChannels() {
+  const chs = await api("/api/channels");
+  const allUsers = await api("/api/users");
+  screen().innerHTML = `
+    <div class="between" style="margin-bottom:14px">
+      <h1 class="section-title" style="margin:0">Channels</h1>
+      <button class="btn sub sm" id="newChBtn2">＋ New channel</button>
+    </div>
+    <button class="btn ghost sm" id="backToMsgs" style="margin-bottom:14px">‹ Back to messages</button>
+    ${chs.map((ch) => `
+      <div class="card" style="margin-bottom:10px;border-left:4px solid ${ch.color}">
+        <div class="between">
+          <div><strong>${esc(ch.name)}</strong>
+            <div class="small muted">${ch.member_count} members${ch.description ? " · " + esc(ch.description) : ""}</div></div>
+          <button class="btn sub sm" data-edit-ch="${ch.id}">Edit</button>
+        </div>
+      </div>`).join("")}`;
+  $("#backToMsgs").addEventListener("click", () => renderChannelList());
+  $("#newChBtn2").addEventListener("click", () => channelSheet(null, allUsers));
+  screen().querySelectorAll("[data-edit-ch]").forEach((b) =>
+    b.addEventListener("click", () => channelSheet(chs.find((c) => c.id === Number(b.dataset.editCh)), allUsers)));
+}
+
+async function channelSheet(ch, allUsers) {
+  if (!allUsers) allUsers = await api("/api/users");
+  const isNew = !ch;
+  let members = [];
+  if (!isNew) {
+    try { members = await api(`/api/channels/${ch.id}/members`); } catch {}
+  }
+  const memberIds = new Set(members.map((m) => m.id));
+  const userChecks = allUsers.map((u) => `
+    <label class="checkrow ${memberIds.has(u.id) ? "on" : ""}">
+      <input type="checkbox" value="${u.id}" ${memberIds.has(u.id) ? "checked" : ""}/>
+      ${esc(u.full_name)} <span class="muted small">· ${esc(u.roles.map(r=>r.name).join(", ") || "no roles")}</span>
+    </label>`).join("");
+
+  const sheet = openSheet(`
+    <h2>${isNew ? "New channel" : "Edit: " + esc(ch.name)}</h2>
+    <div class="stack" style="margin-top:14px">
+      <div class="field"><label>Channel name</label><input id="cs-name" value="${esc(ch?.name||"")}" placeholder="e.g. Lifeguards"/></div>
+      <div class="field"><label>Description (optional)</label><input id="cs-desc" value="${esc(ch?.description||"")}" placeholder="What this channel is for"/></div>
+      <div class="field"><label>Colour</label><input id="cs-color" type="color" value="${ch?.color||"#26358B"}" style="height:48px;padding:4px"/></div>
+      <div class="field"><label>Members</label><div id="cs-members" class="stack">${userChecks}</div></div>
+      <button class="btn block" id="cs-save">${isNew ? "Create channel" : "Save changes"}</button>
+      ${!isNew ? `<button class="btn danger block" id="cs-del" style="margin-top:6px">Delete channel</button>` : ""}
+    </div>`);
+
+  sheet.querySelectorAll(".checkrow input[type=checkbox]").forEach((cb) =>
+    cb.addEventListener("change", () => cb.closest(".checkrow").classList.toggle("on", cb.checked)));
+
+  $("#cs-save").addEventListener("click", async () => {
+    const name = $("#cs-name").value.trim();
+    if (!name) return toast("Name required", "err");
+    const member_ids = [...sheet.querySelectorAll("#cs-members input:checked")].map((c) => Number(c.value));
+    const body = { name, description: $("#cs-desc").value.trim(), color: $("#cs-color").value, member_ids };
+    try {
+      if (isNew) await api("/api/channels", { method: "POST", body });
+      else await api(`/api/channels/${ch.id}`, { method: "PATCH", body });
+      closeSheet();
+      toast("Saved", "ok");
+      State._channels = await api("/api/channels");
+      adminChannels();
+    } catch (err) { toast(err.message, "err"); }
+  });
+
+  $("#cs-del")?.addEventListener("click", async () => {
+    if (!confirm(`Delete channel "${ch.name}"? This cannot be undone.`)) return;
+    try {
+      await api(`/api/channels/${ch.id}`, { method: "DELETE" });
+      closeSheet(); toast("Channel deleted", "ok");
+      State._channels = await api("/api/channels");
+      renderChannelList();
+    } catch (err) { toast(err.message, "err"); }
+  });
+}
+
+// ------------------------------------------------------------------ sheets/modals
+function openSheet(html) {
+  closeSheet();
+  const bd = document.createElement("div");
+  bd.className = "sheet-backdrop"; bd.id = "sheetBackdrop";
+  bd.innerHTML = `<div class="sheet"><div class="grip"></div>${html}</div>`;
+  bd.addEventListener("click", (e) => { if (e.target === bd) closeSheet(); });
+  document.body.appendChild(bd);
+  return bd;
+}
+function closeSheet() { document.getElementById("sheetBackdrop")?.remove(); }
+
+function userSheet(u) {
+  const isNew = !u;
+  const roleChecks = State.roles.map((r) => `
+    <label class="checkrow ${u?.roles?.some((x) => x.id === r.id) ? "on" : ""}">
+      <input type="checkbox" value="${r.id}" ${u?.roles?.some((x) => x.id === r.id) ? "checked" : ""}/>
+      <span class="tag" style="background:${r.color}">${esc(r.name)}</span>
+    </label>`).join("");
+  const sheet = openSheet(`
+    <h2>${isNew ? "Add person" : esc(u.full_name)}</h2>
+    <div class="stack" style="margin-top:14px">
+      <div class="field"><label>Full name</label><input id="u-name" value="${esc(u?.full_name || "")}"/></div>
+      <div class="field"><label>Username</label><input id="u-username" value="${esc(u?.username || "")}" ${isNew ? "" : "disabled"} autocapitalize="none"/></div>
+      <div class="field"><label>Email</label><input id="u-email" type="email" value="${esc(u?.email || "")}"/></div>
+      <div class="field"><label>Phone</label><input id="u-phone" value="${esc(u?.phone || "")}"/></div>
+      <div class="field"><label>${isNew ? "Password" : "Reset password (blank = unchanged)"}</label><input id="u-pass" type="password" placeholder="${isNew ? "default: password" : ""}"/></div>
+      <div class="field"><label>Lifeguard training expiry</label><input id="u-train" type="date" value="${esc(u?.training_expiry || "")}"/></div>
+      <div class="field"><label>Roles / qualifications</label>${roleChecks}</div>
+      <label class="checkrow ${u?.is_admin ? "on" : ""}"><input type="checkbox" id="u-admin" ${u?.is_admin ? "checked" : ""}/> Administrator access</label>
+      ${!isNew ? `<label class="checkrow ${u?.active === false ? "" : "on"}"><input type="checkbox" id="u-active" ${u?.active === false ? "" : "checked"}/> Active (can sign in)</label>` : ""}
+      <button class="btn block" id="u-save">${isNew ? "Create person" : "Save changes"}</button>
+    </div>`);
+  sheet.querySelectorAll(".checkrow input[type=checkbox]").forEach((cb) =>
+    cb.addEventListener("change", () => cb.closest(".checkrow").classList.toggle("on", cb.checked)));
+  $("#u-save").addEventListener("click", async () => {
+    const role_ids = [...sheet.querySelectorAll('.field input[type=checkbox]:checked')].map((c) => Number(c.value)).filter(Boolean);
+    const body = {
+      full_name: $("#u-name").value, email: $("#u-email").value, phone: $("#u-phone").value,
+      training_expiry: $("#u-train").value || null, is_admin: $("#u-admin").checked, role_ids,
+    };
+    if ($("#u-pass").value) body.password = $("#u-pass").value;
+    try {
+      if (isNew) { body.username = $("#u-username").value; await api("/api/users", { method: "POST", body }); }
+      else { if ($("#u-active")) body.active = $("#u-active").checked; await api(`/api/users/${u.id}`, { method: "PATCH", body }); }
+      closeSheet(); toast("Saved", "ok"); manageUsers();
+    } catch (err) { toast(err.message, "err"); }
+  });
+}
+
+function roleSheet(r) {
+  const isNew = !r;
+  const sheet = openSheet(`
+    <h2>${isNew ? "Add role" : "Edit role"}</h2>
+    <div class="stack" style="margin-top:14px">
+      <div class="field"><label>Role name</label><input id="r-name" value="${esc(r?.name || "")}" placeholder="e.g. Assistant Teacher"/></div>
+      <div class="field"><label>Colour</label><input id="r-color" type="color" value="${r?.color || "#0E9F8E"}" style="height:48px;padding:4px"/></div>
+      <label class="checkrow ${r?.requires_training ? "on" : ""}"><input type="checkbox" id="r-train" ${r?.requires_training ? "checked" : ""}/> Requires in-date training (like lifeguards)</label>
+      <button class="btn block" id="r-save">Save</button>
+    </div>`);
+  $("#r-train").addEventListener("change", (e) => e.target.closest(".checkrow").classList.toggle("on", e.target.checked));
+  $("#r-save").addEventListener("click", async () => {
+    const body = { name: $("#r-name").value, color: $("#r-color").value, requires_training: $("#r-train").checked };
+    if (!body.name) return toast("Name required", "err");
+    try {
+      if (isNew) await api("/api/roles", { method: "POST", body });
+      else await api(`/api/roles/${r.id}`, { method: "PATCH", body });
+      State.roles = await api("/api/roles");
+      closeSheet(); toast("Saved", "ok"); manageRoles();
+    } catch (err) { toast(err.message, "err"); }
+  });
+}
+
+function levelSheet(l, roles, staffing) {
+  const isNew = !l;
+  const rows = roles.map((r) => {
+    const cur = staffing.find((s) => s.role_id === r.id)?.count || 0;
+    return `<div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <span class="tag" style="background:${r.color}">${esc(r.name)}</span>
+      <input type="number" min="0" max="6" value="${cur}" data-role="${r.id}" style="max-width:84px"/></div>`;
+  }).join("");
+  const sheet = openSheet(`
+    <h2>${isNew ? "Add class / level" : esc(l.name)}</h2>
+    <div class="stack" style="margin-top:14px">
+      <div class="field"><label>Class name</label><input id="l-name" value="${esc(l?.name || "")}" placeholder="e.g. Level 11"/></div>
+      <div class="field"><label>Default staffing per class</label>${rows}</div>
+      <button class="btn block" id="l-save">Save</button>
+    </div>`);
+  $("#l-save").addEventListener("click", async () => {
+    const name = $("#l-name").value;
+    if (!name) return toast("Name required", "err");
+    const items = [...sheet.querySelectorAll("input[data-role]")]
+      .map((i) => ({ role_id: Number(i.dataset.role), count: Number(i.value) }))
+      .filter((x) => x.count > 0);
+    try {
+      let id = l?.id;
+      if (isNew) { const r = await api("/api/levels", { method: "POST", body: { name } }); id = r.id; }
+      else if (name !== l.name) await api(`/api/levels/${id}`, { method: "PATCH", body: { name } });
+      await api(`/api/levels/${id}/staffing`, { method: "PUT", body: { items } });
+      closeSheet(); toast("Saved", "ok"); manageLevels();
+    } catch (err) { toast(err.message, "err"); }
+  });
+}
+
+// ------------------------------------------------------------------ notifications
+async function refreshNotif() {
+  try {
+    const n = await api("/api/notifications");
+    State.notifUnread = n.unread;
+    const btn = document.getElementById("notifBtn");
+    if (btn) btn.innerHTML = `🔔${State.notifUnread ? `<span class="dot">${State.notifUnread}</span>` : ""}`;
+    return n;
+  } catch { return { rows: [] }; }
+}
+
+async function openNotifications() {
+  const n = await refreshNotif();
+  const sheet = openSheet(`
+    <h2>Notifications</h2>
+    <div class="stack" style="margin-top:12px">
+      ${n.rows?.length ? n.rows.map((r) => `
+        <div class="card" style="margin:0;${r.read ? "" : "border-left:4px solid var(--magenta)"}">
+          <div>${esc(r.message)}</div>
+          <div class="small muted" style="margin-top:4px">${new Date(r.created_at + "Z").toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</div>
+        </div>`).join("") : `<div class="empty">No notifications.</div>`}
+    </div>`);
+  await api("/api/notifications/read-all", { method: "POST" });
+  refreshNotif();
+}
+
+// ------------------------------------------------------------------ PWA install
+let deferredPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredPrompt = e; });
+function renderInstall() {
+  const area = document.getElementById("installArea");
+  if (!area) return;
+  if (deferredPrompt) {
+    area.innerHTML = `<button class="btn sub" id="installBtn">📲 Install app on this device</button>`;
+    $("#installBtn").addEventListener("click", async () => {
+      deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt = null; renderInstall();
+    });
+  } else {
+    area.innerHTML = `Add to Home Screen via your browser's share menu for the full app experience.`;
+  }
+}
+
+// ------------------------------------------------------------------ boot
+async function boot() {
+  if (!State.token) { renderLogin(); return; }
+  try {
+    const data = await api("/api/bootstrap");
+    State.user = data.user;
+    State.roles = data.roles;
+    State.levels = data.levels;
+    State.lanes = data.lanes;
+    State.serverDate = data.server_date;
+    State.view = "home";
+    renderShell();
+    refreshNotif();
+    connectSSE();
+  } catch (err) {
+    logout();
+  }
+}
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+}
+boot();

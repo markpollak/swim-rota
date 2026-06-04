@@ -1,0 +1,7 @@
+# Caddy reverse proxy. {$SITE_ADDRESS} comes from the environment (see .env):
+#   - a domain (e.g. rota.thearc-matlock.co.uk) → automatic HTTPS via Let's Encrypt
+#   - ":80" → plain HTTP on the droplet IP (fine for testing; PWA install needs HTTPS)
+{$SITE_ADDRESS} {
+	encode gzip
+	reverse_proxy app:8080
+}

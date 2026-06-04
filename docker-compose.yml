@@ -1,0 +1,32 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      # Set a stable secret so logins survive redeploys (see .env).
+      SWIM_SECRET: ${SWIM_SECRET:?set SWIM_SECRET in .env}
+      SWIM_DB: /data/swim_rota.db
+    volumes:
+      - swim-data:/data
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in .env (your domain, or :80 for IP-only)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  swim-data:
+  caddy-data:
+  caddy-config:
