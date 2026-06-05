@@ -228,10 +228,13 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .divider { height:1px; background: var(--line); margin: 14px 0; }
 
 /* ---------- nav badge ---------- */
+.nav-label { display:inline-flex; align-items:center; gap:3px; }
 .nav-badge {
-  position:absolute; top:4px; right:8px; min-width:16px; height:16px; padding:0 4px;
-  background:var(--magenta); color:#fff; border-radius:8px; font-size:.6rem; font-weight:800;
-  display:grid; place-items:center; pointer-events:none;
+  background:var(--magenta); color:#fff; border-radius:99px;
+  min-width:14px; height:14px; padding:0 3px;
+  font-size:.58rem; font-weight:800; line-height:1;
+  display:inline-flex; align-items:center; justify-content:center;
+  pointer-events:none; flex-shrink:0;
 }
 
 /* ---------- channel list ---------- */

@@ -219,9 +219,11 @@ function renderShell() {
     <main class="app-main" id="screen"></main>
     <nav class="bottomnav">
       ${nav.map((n) => `
-        <button data-nav="${n.id}" class="${State.view === n.id ? "active" : ""}" style="position:relative">
-          <span class="ico">${n.icon}</span>${n.label}
-          ${n.id === "messages" && State.msgUnread ? `<span class="nav-badge">${State.msgUnread}</span>` : ""}
+        <button data-nav="${n.id}" class="${State.view === n.id ? "active" : ""}">
+          <span class="ico">${n.icon}</span>
+          <span class="nav-label">${n.label}${n.id === "messages" && State.msgUnread
+            ? `<span class="nav-badge">${State.msgUnread > 99 ? "99+" : State.msgUnread}</span>`
+            : ""}</span>
         </button>`).join("")}
     </nav>`;
   app().querySelectorAll("[data-nav]").forEach((b) =>
@@ -232,11 +234,11 @@ function renderShell() {
 
 function updateMsgBadge(delta) {
   State.msgUnread = Math.max(0, (State.msgUnread || 0) + delta);
-  const btn = document.querySelector('[data-nav="messages"]');
-  if (!btn) return;
-  let badge = btn.querySelector(".nav-badge");
+  const label = document.querySelector('[data-nav="messages"] .nav-label');
+  if (!label) return;
+  let badge = label.querySelector(".nav-badge");
   if (State.msgUnread > 0) {
-    if (!badge) { badge = document.createElement("span"); badge.className = "nav-badge"; btn.appendChild(badge); }
+    if (!badge) { badge = document.createElement("span"); badge.className = "nav-badge"; label.appendChild(badge); }
     badge.textContent = State.msgUnread > 99 ? "99+" : State.msgUnread;
   } else { badge?.remove(); }
 }
