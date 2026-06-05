@@ -23,6 +23,7 @@ const State = {
   reportTab: "outstanding",
   rotaRole: null,        // role_id being built in rota builder
   _adminDayDate: null,   // selected date in admin day view
+  _homeWeekStart: null,  // week being viewed on home grid
   notifUnread: 0,
   // messaging
   activeChannel: null,   // channel id currently open
@@ -355,106 +356,125 @@ function bindSlotActions(root) {
 async function viewHome() {
   loading();
   const today = isoToday();
-  const weekEnd = toISO(addDays(parseISO(today), 13));
+  if (!State._homeWeekStart) State._homeWeekStart = mondayOf(parseISO(today));
+  const weekISO = toISO(State._homeWeekStart);
+  const weekEnd = toISO(addDays(State._homeWeekStart, 6));
+
   let allSlots = [], pending = [];
   try {
-    allSlots = await api(`/api/slots?from=${today}&to=${weekEnd}`);
+    allSlots = await api(`/api/slots?from=${weekISO}&to=${weekEnd}`);
     if (State.user.is_admin) pending = await api(`/api/slots?pending=1&from=${today}`);
   } catch (err) { toast(err.message, "err"); }
 
-  const myUpcoming = allSlots
-    .filter((s) => s.assigned_user_id === State.user.id && s.status !== "open")
-    .sort((a, b) => (a.date + a.start_time).localeCompare(b.date + b.start_time));
-  const next7end = toISO(addDays(parseISO(today), 7));
-  const nextShifts = myUpcoming.filter((s) => s.date <= next7end);
+  const mySlots = allSlots.filter((s) => s.assigned_user_id === State.user.id && s.status !== "open");
   const openCount = allSlots.filter((s) => s.status === "open" && (userHasRole(s.role_id) || State.user.is_admin)).length;
 
   const ts = State.user.training_status;
   let trainingBanner = "";
   if (ts === "expired" || ts === "missing")
-    trainingBanner = `<div class="banner danger">⚠️ Your lifeguard training is ${ts}. You can't be approved for lifeguard shifts until it's renewed. <a href="#" data-goto="profile">Update now</a></div>`;
+    trainingBanner = `<div class="banner danger">⚠️ Your lifeguard training is ${ts}. <a href="#" data-goto="profile">Update now</a></div>`;
   else if (ts === "expiring")
-    trainingBanner = `<div class="banner warn">⏰ Your lifeguard training expires on ${fmtDate(State.user.training_expiry)} — please renew soon.</div>`;
+    trainingBanner = `<div class="banner warn">⏰ Training expires ${fmtDate(State.user.training_expiry)} — renew soon.</div>`;
+
+  const weekLabel = `${fmtDate(weekISO).slice(4)} – ${fmtDate(weekEnd).slice(4)}`;
 
   screen().innerHTML = `
-    <h1 class="section-title">Hi ${esc(State.user.full_name.split(" ")[0])} 👋</h1>
+    <h1 class="section-title" style="margin-bottom:10px">Hi ${esc(State.user.full_name.split(" ")[0])} 👋</h1>
     ${trainingBanner}
     ${State.user.is_admin && pending.length ? `
       <div class="banner info between">
-        <span>📋 ${pending.length} shift request${pending.length > 1 ? "s" : ""} awaiting approval.</span>
+        <span>📋 ${pending.length} request${pending.length > 1 ? "s" : ""} awaiting approval.</span>
         <a href="#" data-goto="admin">Review</a>
       </div>` : ""}
-    ${renderWeekStrip(myUpcoming, today)}
-    <div class="grid2" style="margin-bottom:16px">
-      <div class="card center" data-goto="myshifts" style="cursor:pointer;margin-bottom:0">
-        <div class="statnum">${myUpcoming.length}</div><div class="small muted">My upcoming shifts</div>
-      </div>
-      <div class="card center" data-goto="calendar" style="cursor:pointer;margin-bottom:0">
-        <div class="statnum" style="color:var(--magenta)">${openCount}</div><div class="small muted">Open shifts I can grab</div>
+    <div class="between" style="margin-bottom:8px">
+      <strong style="font-size:.95rem">My shifts</strong>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button class="btn sub sm" id="hwPrev" style="padding:5px 10px">‹</button>
+        <span class="small muted" style="white-space:nowrap">${weekLabel}</span>
+        <button class="btn sub sm" id="hwNext" style="padding:5px 10px">›</button>
       </div>
     </div>
-    <h2 class="section-title">My next shifts</h2>
-    ${nextShifts.length
-      ? `<div id="homeCards">${groupSlots(nextShifts).map((g) => homeShiftCard(g, allSlots)).join("")}</div>`
-      : `<div class="empty"><div class="big">🏊</div>No shifts in the next 7 days.<br/><button class="btn sub sm" data-goto="calendar" style="margin-top:10px">Find open shifts</button></div>`}
+    <div id="homeGrid"></div>
+    <div class="grid2" style="margin-top:12px">
+      <div class="card center" data-goto="myshifts" style="cursor:pointer;margin-bottom:0;padding:12px">
+        <div class="statnum" style="font-size:1.25rem">${mySlots.length}</div>
+        <div class="small muted">This week</div>
+      </div>
+      <div class="card center" data-goto="calendar" style="cursor:pointer;margin-bottom:0;padding:12px">
+        <div class="statnum" style="font-size:1.25rem;color:var(--magenta)">${openCount}</div>
+        <div class="small muted">Open to grab</div>
+      </div>
+    </div>
   `;
+
+  renderHomeGrid(mySlots, State._homeWeekStart);
+
+  document.getElementById("hwPrev").onclick = () => { State._homeWeekStart = addDays(State._homeWeekStart, -7); viewHome(); };
+  document.getElementById("hwNext").onclick = () => { State._homeWeekStart = addDays(State._homeWeekStart, 7); viewHome(); };
   bindGoto(screen());
-  bindSlotActions(screen());
 }
 
-function renderWeekStrip(mySlots, today) {
-  const weekStart = mondayOf(parseISO(today));
-  const days = Array.from({ length: 7 }, (_, i) => {
+// ---- Shared compact week grid (days = columns, shifts stacked under each day) ----
+function shiftLabel(s) {
+  // Lifeguard duty → purple life-ring icon; a class → short level code (L1, P&T…)
+  if (!s.level_id) return `<span class="ms-ring" title="Pool Lifeguard"></span>`;
+  const code = (s.level_name || "")
+    .replace("Parents & Toddlers", "P&T")
+    .replace("Level ", "L");
+  return `<span class="ms-code">${esc(code)}</span>`;
+}
+
+function shiftChip(s, future) {
+  const pending = s.status === "requested";
+  const isDuty = !s.level_id;
+  const cls = `ms-chip ${isDuty ? "ms-lg" : pending ? "ms-pending" : "ms-ok"}`;
+  const status = pending ? `<span class="ms-st">⏳</span>` : `<span class="ms-st">✓</span>`;
+  const rel = future ? `<button class="ms-x" data-rel="${s.id}" title="Release shift">×</button>` : "";
+  return `<div class="${cls}" title="${esc(isDuty ? "Pool Lifeguard" : s.level_name || "")} · ${s.start_time}${pending ? " · pending" : " · approved"}">
+    <span class="ms-t">${s.start_time}</span>
+    ${shiftLabel(s)}
+    ${status}${rel}
+  </div>`;
+}
+
+function weekGridHTML(mySlots, weekStart) {
+  const today = isoToday();
+  const byDay = {};
+  for (const s of mySlots) (byDay[s.date] ||= []).push(s);
+  for (const k in byDay) byDay[k].sort((a, b) => a.start_time.localeCompare(b.start_time));
+
+  const cols = Array.from({ length: 7 }, (_, i) => {
     const d = addDays(weekStart, i);
     const iso = toISO(d);
-    const shifts = mySlots.filter((s) => s.date === iso);
-    const count = shifts.length;
-    const hasApproved = shifts.some((s) => s.status === "approved");
-    const isToday = iso === today;
-    const isPast = iso < today;
-    return `<div class="ws-day${isToday ? " ws-today" : ""}${isPast ? " ws-past" : ""}">
-      <div class="ws-dow">${DOW[i]}</div>
-      <div class="ws-num">${d.getDate()}</div>
-      ${count
-        ? `<div class="ws-badge${hasApproved ? " ws-badge-ok" : ""}">${count}</div>`
-        : `<div class="ws-dot"></div>`}
+    const slots = byDay[iso] || [];
+    const future = iso >= today;
+    const body = slots.length
+      ? slots.map((s) => shiftChip(s, future)).join("")
+      : `<span class="ms-none">·</span>`;
+    return `<div class="ms-col${iso === today ? " ms-today" : ""}${iso < today ? " ms-past" : ""}">
+      <div class="ms-head"><span class="ms-dow">${DOW[i]}</span><span class="ms-dnum">${d.getDate()}</span></div>
+      <div class="ms-body">${body}</div>
     </div>`;
-  });
-  return `<div class="week-strip">${days.join("")}</div>`;
+  }).join("");
+
+  return `<div class="ms-grid">${cols}</div>`;
 }
 
-function homeShiftCard(g, allSlots) {
-  const mySlot = g.slots.find((s) => s.assigned_user_id === State.user.id);
-  if (!mySlot) return "";
-  const color = roleColor(mySlot.role_id);
-  const title = g.isDuty ? "Pool Lifeguard" : esc(g.level_name);
+function bindWeekGrid(root, onDone) {
+  root.querySelectorAll("[data-rel]").forEach((b) => b.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!confirm("Release this shift? It will become available for others.")) return;
+    b.disabled = true;
+    try { await api(`/api/slots/${b.dataset.rel}/release`, { method: "POST" }); toast("Shift released", "ok"); onDone(); }
+    catch (err) { toast(err.message, "err"); b.disabled = false; }
+  }));
+}
 
-  let coworkersHtml = "";
-  if (g.isDuty) {
-    const coworkers = allSlots.filter((s) =>
-      s.date === g.date && s.start_time === g.start &&
-      s.level_id == null &&
-      s.assigned_user_id && s.assigned_user_id !== State.user.id &&
-      s.status === "approved"
-    );
-    if (coworkers.length) {
-      const names = [...new Set(coworkers.map((s) => s.assigned_name?.split(" ")[0]))].filter(Boolean).join(", ");
-      coworkersHtml = `<div class="hsc-cowork">🤝 With: ${esc(names)}</div>`;
-    }
-  }
-
-  return `<div class="hsc" style="border-left-color:${color}">
-    <div class="hsc-top">
-      <span class="hsc-date">${fmtDate(g.date)}</span>
-      <span class="hsc-time">${g.start}–${g.end}</span>
-    </div>
-    <div class="hsc-title">${title}</div>
-    ${coworkersHtml}
-    <div class="hsc-bot">
-      ${statusPill(mySlot)}
-      ${slotActions(mySlot)}
-    </div>
-  </div>`;
+function renderHomeGrid(mySlots, weekStart) {
+  const grid = document.getElementById("homeGrid");
+  if (!grid) return;
+  grid.innerHTML = weekGridHTML(mySlots, weekStart);
+  bindWeekGrid(grid, viewHome);
 }
 
 function bindGoto(root) {
@@ -777,33 +797,41 @@ function addSlotSheet(date) {
 // ------------------------------------------------------------------ MY SHIFTS
 async function viewMyShifts() {
   loading();
-  let slots = [];
-  try { slots = await api(`/api/slots?mine=1`); } catch (err) { toast(err.message, "err"); }
   const today = isoToday();
-  const upcoming = slots.filter((s) => s.date >= today).sort((a, b) => (a.date + a.start_time).localeCompare(b.date + b.start_time));
-  const past = slots.filter((s) => s.date < today).sort((a, b) => (b.date + b.start_time).localeCompare(a.date + a.start_time));
-  const list = State.myTab === "upcoming" ? upcoming : past;
+  if (!State._myWeekStart) State._myWeekStart = mondayOf(parseISO(today));
+  const weekISO = toISO(State._myWeekStart);
+  const weekEnd = toISO(addDays(State._myWeekStart, 6));
+
+  let slots = [];
+  try { slots = await api(`/api/slots?mine=1&from=${weekISO}&to=${weekEnd}`); } catch (err) { toast(err.message, "err"); }
+  const mySlots = slots.filter((s) => s.assigned_user_id === State.user.id && s.status !== "open");
+  const weekLabel = `${fmtDate(weekISO).slice(4)} – ${fmtDate(weekEnd).slice(4)}`;
 
   screen().innerHTML = `
-    <h1 class="section-title">My shifts</h1>
-    <div class="tabs">
-      <button data-tab="upcoming" class="${State.myTab === "upcoming" ? "active" : ""}">Upcoming (${upcoming.length})</button>
-      <button data-tab="past" class="${State.myTab === "past" ? "active" : ""}">Past (${past.length})</button>
+    <div class="between" style="margin-bottom:8px">
+      <h1 class="section-title" style="margin:0">My shifts</h1>
+      <button class="btn sub sm" id="msToday" style="padding:5px 12px">Today</button>
     </div>
-    <div id="msBody">
-      ${list.length ? groupByDate(list) : `<div class="empty"><div class="big">🗓️</div>No ${State.myTab} shifts.</div>`}
+    <div class="between" style="margin-bottom:10px">
+      <button class="btn sub sm" id="msPrev" style="padding:6px 14px">‹</button>
+      <strong class="small" style="white-space:nowrap">${weekLabel}</strong>
+      <button class="btn sub sm" id="msNext" style="padding:6px 14px">›</button>
+    </div>
+    <div id="msGrid"></div>
+    <div class="ms-legend">
+      <span><span class="ms-ring"></span> Lifeguard</span>
+      <span><span class="ms-key ms-key-ok">✓</span> Approved</span>
+      <span><span class="ms-key ms-key-pending">⏳</span> Pending</span>
+      <span><span class="ms-key ms-key-x">×</span> Release</span>
     </div>`;
-  screen().querySelectorAll("[data-tab]").forEach((b) =>
-    b.addEventListener("click", () => { State.myTab = b.dataset.tab; viewMyShifts(); }));
-  bindSlotActions(screen());
-}
 
-function groupByDate(slots) {
-  const byDate = {};
-  for (const s of slots) (byDate[s.date] ||= []).push(s);
-  return Object.keys(byDate).sort((a, b) => State.myTab === "past" ? b.localeCompare(a) : a.localeCompare(b))
-    .map((d) => `<div class="day-head">${fmtDate(d)} <span class="date">${d.split("-").reverse().join("/")}</span></div>` +
-      groupSlots(byDate[d]).map(classCard).join("")).join("");
+  const grid = $("#msGrid");
+  grid.innerHTML = weekGridHTML(mySlots, State._myWeekStart);
+  bindWeekGrid(grid, viewMyShifts);
+
+  $("#msPrev").onclick = () => { State._myWeekStart = addDays(State._myWeekStart, -7); viewMyShifts(); };
+  $("#msNext").onclick = () => { State._myWeekStart = addDays(State._myWeekStart, 7); viewMyShifts(); };
+  $("#msToday").onclick = () => { State._myWeekStart = mondayOf(parseISO(today)); viewMyShifts(); };
 }
 
 // ------------------------------------------------------------------ ADMIN

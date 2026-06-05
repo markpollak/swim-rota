@@ -6,6 +6,8 @@
   --blue-soft: #eef0f9;
   --magenta: #A4358B;
   --magenta-soft: #f7eaf4;
+  --purple: #6d3bd4;
+  --purple-soft: #efe9fb;
   --teal: #0E9F8E;
   --green: #1f9d55;
   --green-soft: #e7f6ed;
@@ -394,3 +396,69 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .hsc-title { font-size:.82rem; color:var(--muted); margin-bottom:6px; }
 .hsc-cowork { font-size:.78rem; color:var(--muted); margin-bottom:6px; }
 .hsc-bot { display:flex; align-items:center; gap:8px; }
+
+/* ---------- my-shifts week grid (days = columns) ---------- */
+.ms-grid {
+  display:grid; grid-template-columns:repeat(7, minmax(0,1fr));
+  gap:4px; background:var(--blue-soft); border-radius:14px; padding:5px;
+}
+.ms-col {
+  display:flex; flex-direction:column; min-width:0;
+  background:#fff; border-radius:9px; overflow:hidden;
+}
+.ms-col.ms-today { box-shadow:inset 0 0 0 2px var(--blue); }
+.ms-col.ms-past { opacity:.6; }
+.ms-head {
+  text-align:center; padding:5px 0 4px; border-bottom:1px solid var(--line);
+  display:flex; flex-direction:column; line-height:1.05;
+}
+.ms-dow { font-size:.56rem; font-weight:800; text-transform:uppercase; color:var(--muted); letter-spacing:.02em; }
+.ms-dnum { font-size:.92rem; font-weight:800; color:var(--ink); }
+.ms-col.ms-today .ms-dow, .ms-col.ms-today .ms-dnum { color:var(--blue); }
+.ms-body { display:flex; flex-direction:column; gap:3px; padding:4px 3px; min-height:34px; }
+.ms-none { text-align:center; color:var(--line); font-weight:800; font-size:1rem; line-height:26px; }
+
+/* a single shift chip */
+.ms-chip {
+  display:flex; flex-direction:column; align-items:center; gap:1px;
+  position:relative; padding:4px 2px 5px; border-radius:8px;
+  border:1.5px solid transparent;
+}
+.ms-chip.ms-ok      { background:var(--green-soft);  border-color:#bce6cd; }
+.ms-chip.ms-pending { background:var(--amber-soft);  border-color:#f0d49a; }
+.ms-chip.ms-lg      { background:var(--purple-soft); border-color:#cdbcf2; }
+.ms-t   { font-size:.62rem; font-weight:800; color:var(--ink); white-space:nowrap; }
+.ms-code{ font-size:.82rem; font-weight:900; line-height:1; }
+.ms-chip.ms-ok .ms-code      { color:var(--green); }
+.ms-chip.ms-pending .ms-code { color:var(--amber); }
+.ms-st  { font-size:.66rem; line-height:1; }
+.ms-chip.ms-pending .ms-st { color:var(--amber); }
+.ms-chip.ms-ok .ms-st      { color:var(--green); }
+.ms-chip.ms-lg .ms-st      { color:var(--purple); }
+
+/* purple life-ring icon = lifeguard duty */
+.ms-ring {
+  display:inline-block; width:15px; height:15px; border-radius:50%;
+  border:4px solid var(--purple); background:#fff; box-sizing:border-box;
+  flex-shrink:0; vertical-align:middle;
+}
+
+/* release button — small × in the chip corner */
+.ms-x {
+  position:absolute; top:-5px; right:-5px;
+  width:16px; height:16px; padding:0; border:none; border-radius:50%;
+  background:var(--magenta); color:#fff; font-size:.74rem; font-weight:800;
+  line-height:15px; cursor:pointer; box-shadow:var(--shadow);
+}
+.ms-x:hover { filter:brightness(1.08); }
+
+/* legend under the grid */
+.ms-legend {
+  display:flex; flex-wrap:wrap; gap:6px 14px; justify-content:center;
+  margin-top:12px; font-size:.72rem; color:var(--muted);
+}
+.ms-legend > span { display:inline-flex; align-items:center; gap:5px; }
+.ms-key { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:5px; font-size:.66rem; font-weight:800; }
+.ms-key-ok      { background:var(--green-soft);  color:var(--green); }
+.ms-key-pending { background:var(--amber-soft);  color:var(--amber); }
+.ms-key-x       { background:var(--magenta); color:#fff; border-radius:50%; }
