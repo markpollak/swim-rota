@@ -9,7 +9,6 @@ const State = {
   user: null,
   roles: [],
   levels: [],
-  lanes: 6,
   serverDate: null,
   view: "home",
   // calendar
@@ -23,6 +22,7 @@ const State = {
   manageTab: "users",
   reportTab: "outstanding",
   rotaRole: null,        // role_id being built in rota builder
+  _adminDayDate: null,   // selected date in admin day view
   notifUnread: 0,
   // messaging
   activeChannel: null,   // channel id currently open
@@ -246,24 +246,23 @@ function renderView() {
 
 // ------------------------------------------------------------------ slot grouping + cards
 function groupSlots(slots) {
-  // group into class cards keyed by date|start|lane|level
+  // group into class cards keyed by date|start|level
   const map = new Map();
   for (const s of slots) {
-    const isDuty = s.level_id == null && s.lane == null;
+    const isDuty = s.level_id == null;
     const key = isDuty
       ? `${s.date}|${s.start_time}|duty`
-      : `${s.date}|${s.start_time}|${s.lane}|${s.level_id}`;
+      : `${s.date}|${s.start_time}|${s.level_id}`;
     if (!map.has(key)) {
       map.set(key, {
         date: s.date, start: s.start_time, end: s.end_time,
-        lane: s.lane, level_id: s.level_id, level_name: s.level_name,
+        level_id: s.level_id, level_name: s.level_name,
         isDuty, slots: [],
       });
     }
     map.get(key).slots.push(s);
   }
-  return [...map.values()].sort((a, b) =>
-    a.start.localeCompare(b.start) || (a.lane || 0) - (b.lane || 0));
+  return [...map.values()].sort((a, b) => a.start.localeCompare(b.start));
 }
 
 function statusPill(s) {
@@ -292,7 +291,7 @@ function slotActions(s) {
 function classCard(g) {
   const color = roleColor(g.slots[0].role_id);
   const title = g.isDuty ? "Pool Lifeguard" : g.level_name;
-  const sub = g.isDuty ? "On duty — whole session" : `Lane ${g.lane}`;
+  const sub = g.isDuty ? "On duty — whole session" : "";
   const rows = g.slots.map((s) => `
     <div class="slotrow">
       <div class="who">
@@ -304,7 +303,7 @@ function classCard(g) {
   return `
     <div class="classcard" style="border-left-color:${color}" data-card>
       <div class="ch">
-        <div><span class="t">${esc(title)}</span> <span class="muted small">· ${esc(sub)}</span></div>
+        <div><span class="t">${esc(title)}</span>${sub ? ` <span class="muted small">· ${esc(sub)}</span>` : ""}</div>
         <span class="time">${g.start}–${g.end}</span>
       </div>
       ${rows}
@@ -337,13 +336,18 @@ async function viewHome() {
   loading();
   const today = isoToday();
   const weekEnd = toISO(addDays(parseISO(today), 13));
-  let mySlots = [], openCount = 0, pending = [];
+  let allSlots = [], pending = [];
   try {
-    mySlots = await api(`/api/slots?mine=1&from=${today}&to=${weekEnd}`);
-    const open = await api(`/api/slots?status=open&from=${today}&to=${weekEnd}`);
-    openCount = open.filter((s) => userHasRole(s.role_id) || State.user.is_admin).length;
+    allSlots = await api(`/api/slots?from=${today}&to=${weekEnd}`);
     if (State.user.is_admin) pending = await api(`/api/slots?pending=1&from=${today}`);
   } catch (err) { toast(err.message, "err"); }
+
+  const myUpcoming = allSlots
+    .filter((s) => s.assigned_user_id === State.user.id && s.status !== "open")
+    .sort((a, b) => (a.date + a.start_time).localeCompare(b.date + b.start_time));
+  const next7end = toISO(addDays(parseISO(today), 7));
+  const nextShifts = myUpcoming.filter((s) => s.date <= next7end);
+  const openCount = allSlots.filter((s) => s.status === "open" && (userHasRole(s.role_id) || State.user.is_admin)).length;
 
   const ts = State.user.training_status;
   let trainingBanner = "";
@@ -351,9 +355,6 @@ async function viewHome() {
     trainingBanner = `<div class="banner danger">⚠️ Your lifeguard training is ${ts}. You can't be approved for lifeguard shifts until it's renewed. <a href="#" data-goto="profile">Update now</a></div>`;
   else if (ts === "expiring")
     trainingBanner = `<div class="banner warn">⏰ Your lifeguard training expires on ${fmtDate(State.user.training_expiry)} — please renew soon.</div>`;
-
-  const upcoming = mySlots.filter((s) => s.status !== "open")
-    .sort((a, b) => (a.date + a.start_time).localeCompare(b.date + b.start_time)).slice(0, 5);
 
   screen().innerHTML = `
     <h1 class="section-title">Hi ${esc(State.user.full_name.split(" ")[0])} 👋</h1>
@@ -363,20 +364,77 @@ async function viewHome() {
         <span>📋 ${pending.length} shift request${pending.length > 1 ? "s" : ""} awaiting approval.</span>
         <a href="#" data-goto="admin">Review</a>
       </div>` : ""}
-    <div class="grid2">
-      <div class="card center" data-goto="myshifts" style="cursor:pointer">
-        <div class="statnum">${upcoming.length}</div><div class="small muted">My upcoming shifts</div>
+    ${renderWeekStrip(myUpcoming, today)}
+    <div class="grid2" style="margin-bottom:16px">
+      <div class="card center" data-goto="myshifts" style="cursor:pointer;margin-bottom:0">
+        <div class="statnum">${myUpcoming.length}</div><div class="small muted">My upcoming shifts</div>
       </div>
-      <div class="card center" data-goto="calendar" style="cursor:pointer">
+      <div class="card center" data-goto="calendar" style="cursor:pointer;margin-bottom:0">
         <div class="statnum" style="color:var(--magenta)">${openCount}</div><div class="small muted">Open shifts I can grab</div>
       </div>
     </div>
     <h2 class="section-title">My next shifts</h2>
-    ${upcoming.length ? `<div id="homeCards">${groupSlots(upcoming).map(classCard).join("")}</div>`
-      : `<div class="empty"><div class="big">🏊</div>No upcoming shifts yet.<br/><button class="btn sub sm" data-goto="calendar" style="margin-top:10px">Find open shifts</button></div>`}
+    ${nextShifts.length
+      ? `<div id="homeCards">${groupSlots(nextShifts).map((g) => homeShiftCard(g, allSlots)).join("")}</div>`
+      : `<div class="empty"><div class="big">🏊</div>No shifts in the next 7 days.<br/><button class="btn sub sm" data-goto="calendar" style="margin-top:10px">Find open shifts</button></div>`}
   `;
   bindGoto(screen());
   bindSlotActions(screen());
+}
+
+function renderWeekStrip(mySlots, today) {
+  const weekStart = mondayOf(parseISO(today));
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = addDays(weekStart, i);
+    const iso = toISO(d);
+    const shifts = mySlots.filter((s) => s.date === iso);
+    const count = shifts.length;
+    const hasApproved = shifts.some((s) => s.status === "approved");
+    const isToday = iso === today;
+    const isPast = iso < today;
+    return `<div class="ws-day${isToday ? " ws-today" : ""}${isPast ? " ws-past" : ""}">
+      <div class="ws-dow">${DOW[i]}</div>
+      <div class="ws-num">${d.getDate()}</div>
+      ${count
+        ? `<div class="ws-badge${hasApproved ? " ws-badge-ok" : ""}">${count}</div>`
+        : `<div class="ws-dot"></div>`}
+    </div>`;
+  });
+  return `<div class="week-strip">${days.join("")}</div>`;
+}
+
+function homeShiftCard(g, allSlots) {
+  const mySlot = g.slots.find((s) => s.assigned_user_id === State.user.id);
+  if (!mySlot) return "";
+  const color = roleColor(mySlot.role_id);
+  const title = g.isDuty ? "Pool Lifeguard" : esc(g.level_name);
+
+  let coworkersHtml = "";
+  if (g.isDuty) {
+    const coworkers = allSlots.filter((s) =>
+      s.date === g.date && s.start_time === g.start &&
+      s.level_id == null &&
+      s.assigned_user_id && s.assigned_user_id !== State.user.id &&
+      s.status === "approved"
+    );
+    if (coworkers.length) {
+      const names = [...new Set(coworkers.map((s) => s.assigned_name?.split(" ")[0]))].filter(Boolean).join(", ");
+      coworkersHtml = `<div class="hsc-cowork">🤝 With: ${esc(names)}</div>`;
+    }
+  }
+
+  return `<div class="hsc" style="border-left-color:${color}">
+    <div class="hsc-top">
+      <span class="hsc-date">${fmtDate(g.date)}</span>
+      <span class="hsc-time">${g.start}–${g.end}</span>
+    </div>
+    <div class="hsc-title">${title}</div>
+    ${coworkersHtml}
+    <div class="hsc-bot">
+      ${statusPill(mySlot)}
+      ${slotActions(mySlot)}
+    </div>
+  </div>`;
 }
 
 function bindGoto(root) {
@@ -545,16 +603,30 @@ function renderWeekGrid(allSlots) {
       const daySlots = map[time]?.[day.iso] || [];
       if (!daySlots.length) return `<td class="wg-cell wg-empty"></td>`;
 
-      // Group by class (level+lane) or lifeguard duty
+      // Group by class (level) or lifeguard duty
       const groups = {};
       for (const s of daySlots) {
-        const isDuty = !s.level_id && !s.lane;
-        const key = isDuty ? "__duty__" : `${s.level_id}_${s.lane}`;
-        if (!groups[key]) groups[key] = { isDuty, level_name: s.level_name, lane: s.lane, slots: [] };
+        const isDuty = !s.level_id;
+        const key = isDuty ? "__duty__" : `${s.level_id}`;
+        if (!groups[key]) groups[key] = { isDuty, level_name: s.level_name, slots: [] };
         groups[key].slots.push(s);
       }
 
-      const pills = Object.values(groups).map((g) => {
+      // Duty (lifeguard) groups first so coverage stays visible when capped,
+      // then cap the rest with a "+N more" pill to keep row heights bounded
+      // (a single busy day would otherwise stretch the whole table row).
+      const groupVals = Object.values(groups).sort(
+        (a, b) => (b.isDuty ? 1 : 0) - (a.isDuty ? 1 : 0)
+      );
+      const MAX_PILLS = 4;
+      let shownGroups = groupVals;
+      let moreCount = 0;
+      if (groupVals.length > MAX_PILLS) {
+        shownGroups = groupVals.slice(0, MAX_PILLS - 1);
+        moreCount = groupVals.length - shownGroups.length;
+      }
+
+      const pills = shownGroups.map((g) => {
         if (g.isDuty) {
           const approved = g.slots.filter((s) => s.status === "approved").length;
           const total = g.slots.length;
@@ -566,13 +638,11 @@ function renderWeekGrid(allSlots) {
         const assignedSlot = g.slots.find((s) => s.assigned_user_id && s.status === "approved");
         const pendingSlot = g.slots.find((s) => s.status === "requested");
         const mine = g.slots.some((s) => s.assigned_user_id === u.id);
-        const isOpen = g.slots.every((s) => s.status === "open");
         const cls = assignedSlot ? "wg-pill-ok" : pendingSlot ? "wg-pill-pending" : "wg-pill-open";
         const shortName = (g.level_name || "").replace("Parents & Toddlers", "P&T").replace("Level ", "L");
         const who = assignedSlot ? ` · ${assignedSlot.assigned_name?.split(" ")[0]}` : pendingSlot ? " · ⏳" : "";
-        const laneStr = g.lane ? ` L${g.lane}` : "";
-        return `<div class="wg-pill ${cls}${mine ? " wg-mine" : ""}">${esc(shortName)}${laneStr}${esc(who)}</div>`;
-      }).join("");
+        return `<div class="wg-pill ${cls}${mine ? " wg-mine" : ""}">${esc(shortName)}${esc(who)}</div>`;
+      }).join("") + (moreCount ? `<div class="wg-pill wg-pill-more">+${moreCount} more</div>` : "");
 
       return `<td class="wg-cell" data-date="${day.iso}" data-time="${time}">${pills}</td>`;
     }).join("");
@@ -634,18 +704,14 @@ function renderDayBody(allSlots) {
 }
 
 function addSlotSheet(date) {
-  const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
   const levelOpts = State.levels.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
   const roleOpts = State.roles.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
-  const laneOpts = `<option value="">No lane (pool duty)</option>` +
-    Array.from({length: State.lanes}, (_, i) => `<option value="${i+1}">Lane ${i+1}</option>`).join("");
-  const sheet = openSheet(`
+  openSheet(`
     <h2>Add shift</h2>
     <p class="small muted">${fmtLong(date)}</p>
     <div class="stack" style="margin-top:14px">
       <div class="field"><label>Class / level</label>
         <select id="as-level"><option value="">Pool duty (lifeguard)</option>${levelOpts}</select></div>
-      <div class="field"><label>Lane</label><select id="as-lane">${laneOpts}</select></div>
       <div class="field"><label>Role</label><select id="as-role">${roleOpts}</select></div>
       <div class="row">
         <div class="field" style="flex:1"><label>Start time</label>
@@ -657,65 +723,31 @@ function addSlotSheet(date) {
         <input id="as-label" placeholder="e.g. Squad training"/></div>
       <div class="field"><label>Notes (optional)</label>
         <input id="as-notes" placeholder="Anything admins should know"/></div>
-      <div class="field" id="as-repeat-wrap">
-        <label class="checkrow" id="as-repeat-row">
-          <input type="checkbox" id="as-repeat"/>
-          Also add to the <strong>weekly recurring template</strong> (generates this slot every week on this day)
-        </label>
-      </div>
       <button class="btn block" id="as-save">Add shift</button>
     </div>`);
 
-  // auto-set label when level changes
   $("#as-level").addEventListener("change", () => {
     const sel = $("#as-level");
     const name = sel.options[sel.selectedIndex].text;
     if (!$("#as-label").value) $("#as-label").value = name !== "Pool duty (lifeguard)" ? name : "";
   });
-  // toggle lane based on level
-  $("#as-level").addEventListener("change", () => {
-    const isPoolDuty = !$("#as-level").value;
-    $("#as-lane").value = isPoolDuty ? "" : ($("#as-lane").value || "1");
-  });
-  // checkrow toggle
-  $("#as-repeat").addEventListener("change", (e) =>
-    e.target.closest(".checkrow").classList.toggle("on", e.target.checked));
 
   $("#as-save").addEventListener("click", async () => {
     const levelId = $("#as-level").value || null;
-    const laneVal = $("#as-lane").value || null;
     const roleId = parseInt($("#as-role").value);
     const startTime = $("#as-start").value;
     const endTime = $("#as-end").value;
     const label = $("#as-label").value.trim() || null;
     const notes = $("#as-notes").value.trim() || null;
-    const addToTemplate = $("#as-repeat").checked;
-
     if (!startTime || !endTime || startTime >= endTime)
       return toast("Set valid start and end times", "err");
-
     try {
-      // create the one-off slot
       await api("/api/slots", { method: "POST", body: {
         date, start_time: startTime, end_time: endTime,
         level_id: levelId ? parseInt(levelId) : null,
-        lane: laneVal ? parseInt(laneVal) : null,
         role_id: roleId, label, notes,
       }});
-
-      if (addToTemplate) {
-        const d = parseISO(date);
-        const weekday = (d.getDay() + 6) % 7;
-        await api("/api/templates", { method: "POST", body: {
-          weekday, start_time: startTime, end_time: endTime,
-          level_id: levelId ? parseInt(levelId) : null,
-          lane: laneVal ? parseInt(laneVal) : null,
-          role_id: roleId, count: 1, label,
-        }});
-        toast("Shift added + saved to weekly template", "ok");
-      } else {
-        toast("Shift added", "ok");
-      }
+      toast("Shift added", "ok");
       closeSheet();
       viewCalendar();
     } catch (err) { toast(err.message, "err"); }
@@ -784,7 +816,7 @@ async function adminApprovals() {
       <div class="between">
         <div>
           <strong>${esc(s.assigned_name)}</strong> · <span style="color:${roleColor(s.role_id)}">${esc(roleName(s.role_id))}</span>
-          <div class="small muted">${fmtDate(s.date)} · ${s.start_time}–${s.end_time} · ${esc(s.level_name || "Pool duty")}${s.lane ? " · Lane " + s.lane : ""}</div>
+          <div class="small muted">${fmtDate(s.date)} · ${s.start_time}–${s.end_time} · ${esc(s.level_name || "Pool duty")}</div>
         </div>
         <span class="pill requested">Pending</span>
       </div>
@@ -840,7 +872,7 @@ async function reportOutstanding() {
           <div class="day-head">${fmtDate(d)}</div>
           ${byDate[d].map((s) => `<div class="list-item">
             <div><span style="color:${roleColor(s.role_id)};font-weight:700">${esc(roleName(s.role_id))}</span>
-              <div class="small muted">${s.start_time}–${s.end_time} · ${esc(s.level_name || "Pool duty")}${s.lane ? " · Lane " + s.lane : ""}</div></div>
+              <div class="small muted">${s.start_time}–${s.end_time} · ${esc(s.level_name || "Pool duty")}</div></div>
             ${s.status === "requested" ? `<span class="pill requested">Pending: ${esc(s.assigned_name)}</span>` : `<span class="pill open">Open</span>`}
           </div>`).join("")}`).join("")}`;
     // CSV needs auth header; intercept and download as blob
@@ -885,11 +917,13 @@ async function reportTraining() {
   } catch (err) { rb.innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; }
 }
 
-// ---- manage (users / roles / levels / schedule)
+// ---- manage (users / roles / classes / rota / day view)
 function adminManage() {
   const body = $("#adminBody");
-  const tabs = ["users","roles","levels","rota","schedule"];
-  const labels = ["People","Roles","Classes","Rota Builder","Schedule"];
+  const tabs = ["users","roles","classes","rota","dayview"];
+  const labels = ["People","Roles","Classes","Rota","Day View"];
+  // default "classes" tab if coming from a removed tab
+  if (!tabs.includes(State.manageTab)) State.manageTab = "users";
   body.innerHTML = `
     <div class="tabs" style="background:#fff;border:1px solid var(--line);flex-wrap:wrap">
       ${tabs.map((t,i) => `<button data-mtab="${t}" class="${State.manageTab===t?"active":""}">${labels[i]}</button>`).join("")}
@@ -900,9 +934,9 @@ function adminManage() {
   }));
   if (State.manageTab === "users") manageUsers();
   else if (State.manageTab === "roles") manageRoles();
-  else if (State.manageTab === "levels") manageLevels();
+  else if (State.manageTab === "classes") manageClasses();
   else if (State.manageTab === "rota") rotaBuilder();
-  else manageSchedule();
+  else adminDayView();
 }
 
 // ------------------------------------------------------------------ ROTA BUILDER
@@ -1048,7 +1082,7 @@ function buildRotaGrid(roleSlots, times, weekStart) {
         const name = s.assigned_name ? s.assigned_name.split(" ")[0] : null;
         const cls = taken ? (s.status === "approved" ? "rg-taken-ok" : "rg-taken-pending") : isPast ? "rg-past" : "rg-open";
         const label = s.level_name
-          ? (s.level_name.replace("Parents & Toddlers","P&T").replace("Level ","L") + (s.lane ? ` L${s.lane}` : ""))
+          ? s.level_name.replace("Parents & Toddlers", "P&T").replace("Level ", "L")
           : (name || "Open");
         return `<td class="rg-cell"><div class="rb-cell ${cls}" data-sid="${s.id}"${taken ? ` data-taken="1" title="${name || s.status}"` : ""}>
           ${taken ? esc(name || s.status) : "Open"}
@@ -1143,147 +1177,329 @@ async function manageLevels() {
       levels.find((l) => l.id == c.dataset.level), roles, staffing[c.dataset.level] || [])));
 }
 
-async function manageSchedule() {
+// ------------------------------------------------------------------ CLASSES (levels + schedules)
+async function manageClasses() {
   const mb = $("#manageBody");
-  const templates = await api("/api/templates");
-  const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
-  const byDay = {};
-  for (const t of templates) (byDay[t.weekday] ||= []).push(t);
+  mb.innerHTML = `<div class="spinner"></div>`;
+  const [bootstrap, staffing, roles, schedules] = await Promise.all([
+    api("/api/bootstrap"),
+    api("/api/staffing"),
+    api("/api/roles"),
+    api("/api/class-schedules"),
+  ]);
+  const levels = bootstrap.levels;
+  State.roles = roles;
 
-  // collapse identical template rows (same time/level/lane) into a summary
-  const daySummaries = [0,1,2,3,4,5,6].filter((d) => byDay[d]).map((d) => {
-    const ts = byDay[d];
-    const classes = [...new Set(ts.filter((t) => t.level_name).map((t) => t.level_name))];
-    const times = [...new Set(ts.map((t) => t.start_time))].sort();
-    const firstTime = times[0] || "";
-    const lastSlot = ts.filter((t) => t.start_time === times[times.length-1])[0];
-    const lastEnd = lastSlot?.end_time || "";
-    return { d, ts, classes, firstTime, lastEnd };
-  });
+  // Group schedule sessions by level_id ("duty" for null)
+  const schedByLevel = {};
+  for (const s of schedules) {
+    const key = s.level_id == null ? "duty" : s.level_id;
+    (schedByLevel[key] ||= []).push(s);
+  }
+
+  function schedSummary(key) {
+    const ss = schedByLevel[key] || [];
+    if (!ss.length) return `<span class="small muted" style="color:var(--amber)">No schedule set</span>`;
+    const days = [...new Set(ss.map((s) => DOW[s.weekday]))].join(", ");
+    return `<span class="small muted">${ss.length} session${ss.length !== 1 ? "s" : ""} · ${days}</span>`;
+  }
 
   mb.innerHTML = `
-    <div class="card">
-      <div class="between"><strong>Generate bookable shifts</strong></div>
-      <p class="small muted">Materialise slots from the weekly schedule below into the calendar. Safe to run repeatedly — never duplicates.</p>
-      <div class="row">
-        <select id="genWeeks" style="max-width:140px">
-          <option value="2">2 weeks</option><option value="4" selected>4 weeks</option>
-          <option value="6">6 weeks</option><option value="8">8 weeks</option>
-        </select>
-        <button class="btn" id="genBtn">Generate now</button>
+    <p class="small muted">Set up class schedules and assign default teachers. Sessions auto-generate 6 months forward.</p>
+    <button class="btn block sub" id="addLevel" style="margin-bottom:12px">＋ Add class / level</button>
+
+    <div class="card" style="border-left:4px solid var(--magenta);margin-bottom:10px">
+      <div class="between">
+        <div>
+          <strong>Pool Duty (Lifeguards)</strong>
+          <div style="margin-top:2px">${schedSummary("duty")}</div>
+        </div>
+        <button class="btn sub sm" id="dutySchedBtn">Schedule</button>
       </div>
     </div>
 
-    <div class="between" style="margin:16px 2px 8px">
-      <h3 class="section-title" style="margin:0">Weekly schedule</h3>
-      <button class="btn sub sm" id="addTmplBtn">＋ Add recurring slot</button>
-    </div>
-
-    ${daySummaries.length ? daySummaries.map(({ d, ts, classes, firstTime, lastEnd }) => `
-      <div class="card" style="margin-bottom:10px">
-        <div class="between" style="margin-bottom:8px">
-          <strong>${DAYS[d]}</strong>
-          <span class="small muted">${firstTime}–${lastEnd} · ${ts.length} slots</span>
-        </div>
-        ${classes.length ? `<div class="chips" style="margin-bottom:10px">${
-          classes.map((c) => `<span class="tag" style="background:var(--blue)">${esc(c)}</span>`).join("")
-        }</div>` : `<div class="small muted" style="margin-bottom:8px">Pool duty / lifeguard only</div>`}
-        <details>
-          <summary class="small muted" style="cursor:pointer">Show all ${ts.length} template rows</summary>
-          <div style="margin-top:8px">
-            ${ts.map((t) => `
-              <div class="list-item" style="font-size:.82rem">
-                <div>
-                  <span style="color:${t.role_name === 'Lifeguard' ? 'var(--magenta)' : 'var(--blue)'}; font-weight:700">${esc(t.role_name)}</span>
-                  · ${esc(t.level_name || 'Pool duty')}${t.lane ? ` · Lane ${t.lane}` : ''}
-                  <div class="muted">${t.start_time}–${t.end_time} · ×${t.count}</div>
-                </div>
-                <button class="btn danger sm" data-del-tmpl="${t.id}">✕</button>
-              </div>`).join("")}
+    ${levels.map((l) => {
+      const st = staffing[l.id] || [];
+      const desc = st.map((s) => `${s.count}× ${roleName(s.role_id)}`).join(" + ") || "no staffing";
+      return `<div class="card" style="margin-bottom:10px">
+        <div class="between">
+          <div style="flex:1;min-width:0">
+            <strong>${esc(l.name)}</strong>
+            <div class="small muted">${esc(desc)}</div>
+            <div style="margin-top:2px">${schedSummary(l.id)}</div>
           </div>
-        </details>
-      </div>`).join("") : `<div class="empty">No recurring templates defined yet.</div>`}
+          <div style="display:flex;gap:8px;flex-shrink:0;margin-left:10px">
+            <button class="btn ghost sm" data-level-edit="${l.id}">Edit</button>
+            <button class="btn sub sm" data-level-sched="${l.id}">Schedule</button>
+          </div>
+        </div>
+      </div>`;
+    }).join("")}
 
-    <p class="small muted" style="margin-top:8px">
-      ℹ️ Deleting a template only stops <em>new</em> slots being generated — existing booked shifts are unaffected.
-      After adding or deleting templates, click <strong>Generate now</strong> to update the calendar.
-    </p>`;
+    <div class="card" style="margin-top:16px">
+      <strong>Generate shifts</strong>
+      <p class="small muted" style="margin:6px 0 12px">Extend all scheduled shifts 6 months forward. Safe to run repeatedly — never duplicates.</p>
+      <button class="btn block" id="genBtn">Extend to 6 months</button>
+    </div>`;
+
+  $("#addLevel").addEventListener("click", () => levelSheet(null, roles, {}));
+  $("#dutySchedBtn").addEventListener("click", () =>
+    classScheduleSheet(null, roles, schedByLevel["duty"] || []));
+
+  mb.querySelectorAll("[data-level-edit]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const l = levels.find((x) => x.id === Number(b.dataset.levelEdit));
+      levelSheet(l, roles, staffing[l.id] || []);
+    }));
+
+  mb.querySelectorAll("[data-level-sched]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const l = levels.find((x) => x.id === Number(b.dataset.levelSched));
+      classScheduleSheet(l, roles, schedByLevel[l.id] || []);
+    }));
 
   $("#genBtn").addEventListener("click", async () => {
-    const btn = $("#genBtn"); btn.disabled = true; btn.textContent = "Working…";
+    const btn = $("#genBtn");
+    btn.disabled = true; btn.textContent = "Generating…";
     try {
-      const r = await api("/api/generate", { method: "POST", body: { weeks: Number($("#genWeeks").value) } });
-      toast(`Created ${r.created} new shifts`, "ok");
+      const r = await api("/api/generate", { method: "POST", body: { weeks: 26 } });
+      toast(`${r.created} new shifts created (through ${r.to})`, "ok");
     } catch (err) { toast(err.message, "err"); }
-    btn.disabled = false; btn.textContent = "Generate now";
+    btn.disabled = false; btn.textContent = "Extend to 6 months";
   });
-
-  $("#addTmplBtn").addEventListener("click", () => addTemplateSheet());
-
-  mb.querySelectorAll("[data-del-tmpl]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      if (!confirm("Remove this recurring slot from the template?\n\nExisting booked shifts on the calendar won't be affected.")) return;
-      b.disabled = true;
-      try {
-        await api(`/api/templates/${b.dataset.delTmpl}`, { method: "DELETE" });
-        toast("Template slot removed", "ok");
-        manageSchedule();
-      } catch (err) { toast(err.message, "err"); b.disabled = false; }
-    }));
 }
 
-function addTemplateSheet() {
+function classScheduleSheet(level, roles, existingSessions) {
+  const levelRef = level ? level.id : "duty";
+  const title = level ? `${esc(level.name)} — Schedule` : "Pool Duty — Schedule";
   const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+
+  // Local state: flat list of session objects
+  // {weekday, start_time, end_time, role_id, role_name, user_id, user_name, count}
+  let sessions = (existingSessions || []).map((s) => ({
+    weekday: s.weekday, start_time: s.start_time, end_time: s.end_time,
+    role_id: s.role_id, role_name: s.role_name,
+    user_id: s.user_id, user_name: s.user_name || null,
+    count: s.count || 1,
+  }));
+
+  const defaultRole = level
+    ? (roles.find((r) => r.name === "Teacher") || roles[0])
+    : (roles.find((r) => r.name === "Lifeguard") || roles[0]);
   const dayOpts = DAYS.map((d, i) => `<option value="${i}">${d}</option>`).join("");
-  const levelOpts = State.levels.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
-  const roleOpts = State.roles.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
-  const laneOpts = `<option value="">No lane (pool duty)</option>` +
-    Array.from({length: State.lanes}, (_, i) => `<option value="${i+1}">Lane ${i+1}</option>`).join("");
+  const roleOpts = roles.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
 
   openSheet(`
-    <h2>Add recurring slot</h2>
-    <p class="small muted">This adds a slot to the <strong>weekly template</strong>. It will appear every week on the chosen day. Click <em>Generate</em> afterwards to push it into the calendar.</p>
-    <div class="stack" style="margin-top:14px">
-      <div class="field"><label>Day of week</label><select id="tmpl-day">${dayOpts}</select></div>
-      <div class="field"><label>Class / level</label>
-        <select id="tmpl-level"><option value="">Pool duty (lifeguard)</option>${levelOpts}</select></div>
-      <div class="field"><label>Lane</label><select id="tmpl-lane">${laneOpts}</select></div>
-      <div class="field"><label>Role</label><select id="tmpl-role">${roleOpts}</select></div>
-      <div class="row">
-        <div class="field" style="flex:1"><label>Start time</label>
-          <input id="tmpl-start" type="time" value="16:00" step="1800"/></div>
-        <div class="field" style="flex:1"><label>End time</label>
-          <input id="tmpl-end" type="time" value="16:30" step="1800"/></div>
+    <h2>${title}</h2>
+    <div id="cs-list" style="margin:12px 0 6px"></div>
+    <div style="background:var(--blue-soft);border-radius:12px;padding:14px;margin-bottom:14px">
+      <div class="small" style="font-weight:700;margin-bottom:10px">Add session</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div class="field" style="margin:0;min-width:120px;flex:1.5">
+          <label>Day</label><select id="cs-day">${dayOpts}</select>
+        </div>
+        <div class="field" style="margin:0;flex:1;min-width:90px">
+          <label>Start</label><input id="cs-start" type="time" value="09:00" step="1800"/>
+        </div>
+        <div class="field" style="margin:0;flex:1;min-width:90px">
+          <label>End</label><input id="cs-end" type="time" value="09:30" step="1800"/>
+        </div>
       </div>
-      <div class="field"><label>How many of this role per slot</label>
-        <input id="tmpl-count" type="number" min="1" max="6" value="1" style="max-width:100px"/></div>
-      <div class="field"><label>Label (optional)</label>
-        <input id="tmpl-label" placeholder="e.g. Level 3 · Lane 2"/></div>
-      <button class="btn block" id="tmpl-save">Save recurring slot</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <div class="field" style="margin:0;flex:1;min-width:110px">
+          <label>Role</label><select id="cs-role">${roleOpts}</select>
+        </div>
+        <div class="field" style="margin:0;flex:2;min-width:130px">
+          <label>Assign to</label>
+          <select id="cs-user"><option value="">Open — anyone</option></select>
+        </div>
+        <div class="field" style="margin:0;width:68px">
+          <label>Count</label>
+          <input id="cs-count" type="number" min="1" max="6" value="1" style="padding:10px 8px"/>
+        </div>
+      </div>
+      <button class="btn sub block" id="cs-add" style="margin-top:10px">＋ Add this session</button>
+    </div>
+    <div style="display:flex;gap:10px">
+      <button class="btn ghost block" id="cs-save">Save</button>
+      <button class="btn block" id="cs-generate">Save + Generate 6 months</button>
     </div>`);
 
-  $("#tmpl-save").addEventListener("click", async () => {
-    const levelId = $("#tmpl-level").value || null;
-    const laneVal = $("#tmpl-lane").value || null;
-    const startTime = $("#tmpl-start").value;
-    const endTime = $("#tmpl-end").value;
-    if (!startTime || !endTime || startTime >= endTime)
-      return toast("Set valid start and end times", "err");
+  function renderList() {
+    const el = document.getElementById("cs-list");
+    if (!el) return;
+    if (!sessions.length) {
+      el.innerHTML = `<div class="small muted" style="text-align:center;padding:10px">No sessions yet.</div>`;
+      return;
+    }
+    // Group by weekday for display
+    const byDay = {};
+    sessions.forEach((s, i) => (byDay[s.weekday] ||= []).push({ ...s, _i: i }));
+    el.innerHTML = Object.keys(byDay).sort((a, b) => a - b).map((wd) => `
+      <div style="margin-bottom:10px">
+        <div class="small" style="font-weight:700;color:var(--blue);margin-bottom:4px">${DAYS[wd]}</div>
+        ${byDay[wd].map((s) => `
+          <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin-bottom:6px">
+            <div style="flex:1">
+              <span style="font-weight:700">${s.start_time}–${s.end_time}</span>
+              <span class="small muted" style="margin-left:8px">${esc(s.role_name || "")}</span>
+              ${s.user_name ? `<span class="small" style="margin-left:6px;color:var(--green);font-weight:700">→ ${esc(s.user_name.split(" ")[0])}</span>` : `<span class="small muted" style="margin-left:6px">Open</span>`}
+              ${s.count > 1 ? `<span class="small muted"> ×${s.count}</span>` : ""}
+            </div>
+            <button class="btn danger sm" data-rm="${s._i}">✕</button>
+          </div>`).join("")}
+      </div>`).join("");
+    el.querySelectorAll("[data-rm]").forEach((b) =>
+      b.addEventListener("click", () => { sessions.splice(Number(b.dataset.rm), 1); renderList(); }));
+  }
+  renderList();
+
+  // Load qualified users when role changes
+  const roleEl = document.getElementById("cs-role");
+  const userEl = document.getElementById("cs-user");
+  if (defaultRole) roleEl.value = defaultRole.id;
+
+  async function loadUsers() {
+    const rid = Number(roleEl.value);
     try {
-      await api("/api/templates", { method: "POST", body: {
-        weekday: parseInt($("#tmpl-day").value),
-        start_time: startTime, end_time: endTime,
-        level_id: levelId ? parseInt(levelId) : null,
-        lane: laneVal ? parseInt(laneVal) : null,
-        role_id: parseInt($("#tmpl-role").value),
-        count: parseInt($("#tmpl-count").value) || 1,
-        label: $("#tmpl-label").value.trim() || null,
-      }});
-      closeSheet();
-      toast("Recurring slot added — click Generate to push it to the calendar", "ok");
-      manageSchedule();
-    } catch (err) { toast(err.message, "err"); }
+      const users = await api("/api/users");
+      const q = users.filter((u) => u.active !== false && u.roles.some((r) => r.id === rid));
+      userEl.innerHTML = `<option value="">Open — anyone</option>` +
+        q.map((u) => `<option value="${u.id}">${esc(u.full_name)}</option>`).join("");
+    } catch {}
+  }
+  loadUsers();
+  roleEl.addEventListener("change", loadUsers);
+
+  document.getElementById("cs-add").addEventListener("click", () => {
+    const start = document.getElementById("cs-start").value;
+    const end = document.getElementById("cs-end").value;
+    if (!start || !end || start >= end) return toast("Set valid start and end times", "err");
+    const rid = Number(roleEl.value);
+    const uid = userEl.value ? Number(userEl.value) : null;
+    const count = Number(document.getElementById("cs-count").value) || 1;
+    const role = roles.find((r) => r.id === rid);
+    const userName = uid ? userEl.options[userEl.selectedIndex].text : null;
+    sessions.push({
+      weekday: Number(document.getElementById("cs-day").value),
+      start_time: start, end_time: end,
+      role_id: rid, role_name: role?.name || "",
+      user_id: uid, user_name: userName, count,
+    });
+    renderList();
   });
+
+  async function save(andGenerate) {
+    const saveBtn = document.getElementById("cs-save");
+    const genBtn = document.getElementById("cs-generate");
+    if (saveBtn) saveBtn.disabled = true;
+    if (genBtn) genBtn.disabled = true;
+    try {
+      await api(`/api/class-schedules/level/${levelRef}`, {
+        method: "PUT",
+        body: {
+          sessions: sessions.map((s) => ({
+            weekday: s.weekday, start_time: s.start_time, end_time: s.end_time,
+            role_id: s.role_id, user_id: s.user_id, count: s.count,
+          })),
+        },
+      });
+      if (andGenerate) {
+        const r = await api("/api/generate", { method: "POST", body: { weeks: 26 } });
+        toast(`Saved · ${r.created} new shifts created through ${r.to}`, "ok");
+      } else {
+        toast("Schedule saved", "ok");
+      }
+      closeSheet();
+      manageClasses();
+    } catch (err) {
+      toast(err.message, "err");
+      if (saveBtn) saveBtn.disabled = false;
+      if (genBtn) genBtn.disabled = false;
+    }
+  }
+
+  document.getElementById("cs-save").addEventListener("click", () => save(false));
+  document.getElementById("cs-generate").addEventListener("click", () => save(true));
+}
+
+// ------------------------------------------------------------------ ADMIN DAY VIEW
+async function adminDayView() {
+  const mb = $("#manageBody");
+  if (!State._adminDayDate) State._adminDayDate = isoToday();
+
+  mb.innerHTML = `
+    <p class="small muted">Overview of all classes for a given day.</p>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <input type="date" id="adv-date" value="${State._adminDayDate}" style="flex:1;padding:10px 12px"/>
+      <button class="btn sub sm" id="adv-today">Today</button>
+    </div>
+    <div id="adv-body"><div class="spinner"></div></div>`;
+
+  async function loadDay(isoDate) {
+    const body = document.getElementById("adv-body");
+    if (!body) return;
+    try {
+      const slots = await api(`/api/slots?from=${isoDate}&to=${isoDate}`);
+      if (!slots.length) {
+        body.innerHTML = `<div class="empty">No shifts on ${fmtDate(isoDate)}.</div>`;
+        return;
+      }
+      // Group by time slot
+      const byTime = {};
+      for (const s of slots) (byTime[s.start_time] ||= []).push(s);
+
+      body.innerHTML = `<div class="day-head" style="margin-top:0">${fmtLong(isoDate)}</div>` +
+        Object.keys(byTime).sort().map((time) => {
+          const ss = byTime[time];
+          const end = ss[0].end_time;
+          const duty = ss.filter((s) => !s.level_id);
+          const dutyApproved = duty.filter((s) => s.status === "approved").length;
+          // Get distinct classes (lessons) at this time
+          const classMap = new Map();
+          ss.filter((s) => s.level_id).forEach((s) => {
+            if (!classMap.has(s.level_id)) classMap.set(s.level_id, []);
+            classMap.get(s.level_id).push(s);
+          });
+          const classRows = [...classMap.entries()].map(([lid, cslots]) => {
+            const name = cslots[0].level_name;
+            const approved = cslots.filter((s) => s.status === "approved");
+            const teachers = approved.map((s) => s.assigned_name?.split(" ")[0]).filter(Boolean);
+            const covered = approved.length > 0;
+            return `<div class="list-item" style="padding:8px 0">
+              <div>
+                <span style="color:var(--blue);font-weight:700">${esc(name)}</span>
+                ${teachers.length ? `<span class="small muted"> · ${teachers.join(", ")}</span>` : ""}
+              </div>
+              <span class="pill ${covered ? "approved" : "open"}">${covered ? "✓ Covered" : "Open"}</span>
+            </div>`;
+          }).join("");
+
+          return `<div class="card" style="margin-bottom:8px">
+            <div class="between" style="margin-bottom:${classMap.size ? "8px" : "0"}">
+              <strong>${time}–${end}</strong>
+              ${duty.length ? `<span class="small muted">🛟 ${dutyApproved}/${duty.length} lifeguard${duty.length !== 1 ? "s" : ""}</span>` : ""}
+            </div>
+            ${classMap.size ? `<div style="border-top:1px solid var(--line);padding-top:4px">${classRows}</div>` : ""}
+          </div>`;
+        }).join("");
+    } catch (err) {
+      const body = document.getElementById("adv-body");
+      if (body) body.innerHTML = `<div class="banner danger">${esc(err.message)}</div>`;
+    }
+  }
+
+  document.getElementById("adv-date").addEventListener("change", (e) => {
+    State._adminDayDate = e.target.value;
+    loadDay(e.target.value);
+  });
+  document.getElementById("adv-today").addEventListener("click", () => {
+    State._adminDayDate = isoToday();
+    document.getElementById("adv-date").value = State._adminDayDate;
+    loadDay(State._adminDayDate);
+  });
+
+  loadDay(State._adminDayDate);
 }
 
 // ------------------------------------------------------------------ PROFILE
@@ -1704,7 +1920,6 @@ async function boot() {
     State.user = data.user;
     State.roles = data.roles;
     State.levels = data.levels;
-    State.lanes = data.lanes;
     State.serverDate = data.server_date;
     State.view = "home";
     renderShell();

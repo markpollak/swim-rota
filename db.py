@@ -139,6 +139,30 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_channel_members_user ON channel_members(user_id);
+
+-- Class schedule: one row per (level × weekday × time-slot).
+-- level_id NULL = pool duty (lifeguard cover session).
+CREATE TABLE IF NOT EXISTS class_schedules (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    level_id    INTEGER,
+    weekday     INTEGER NOT NULL,  -- 0=Mon .. 6=Sun
+    start_time  TEXT NOT NULL,
+    end_time    TEXT NOT NULL,
+    active      INTEGER NOT NULL DEFAULT 1
+);
+
+-- Staff requirement per class_schedule slot.
+-- user_id NULL = open slot; non-NULL = auto-assigned (status='approved' on generation).
+CREATE TABLE IF NOT EXISTS schedule_staff (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id INTEGER NOT NULL,
+    role_id     INTEGER NOT NULL,
+    user_id     INTEGER,
+    count       INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_cs_level ON class_schedules(level_id, weekday);
+CREATE INDEX IF NOT EXISTS idx_ss_sched ON schedule_staff(schedule_id);
 """
 
 

@@ -294,6 +294,7 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .wg-pill-partial { background: var(--amber-soft); color: var(--amber); }
 .wg-pill-pending { background: var(--amber-soft); color: var(--amber); }
 .wg-pill-open { background: var(--blue-soft); color: var(--blue); }
+.wg-pill-more { background: transparent; color: var(--muted); font-weight: 700; padding: 1px 5px; }
 .wg-mine { outline: 2px solid var(--magenta); outline-offset: 1px; border-radius: 6px; }
 .wg-hint { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
 .wg-legend { font-size: .72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
@@ -321,3 +322,23 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
   background:var(--green-soft); color:var(--green); border:1px solid #b2e0c4; border-radius:11px;
   padding:10px 14px; font-size:.85rem; font-weight:600; margin-bottom:10px;
 }
+
+/* ---------- home weekly strip ---------- */
+.week-strip { display:flex; background:var(--blue-soft); border-radius:14px; padding:10px 2px; margin-bottom:16px; }
+.ws-day { flex:1; text-align:center; }
+.ws-dow { font-size:.6rem; font-weight:700; color:var(--muted); text-transform:uppercase; margin-bottom:3px; }
+.ws-num { font-size:1rem; font-weight:800; color:var(--ink); margin-bottom:4px; }
+.ws-today .ws-dow, .ws-today .ws-num { color:var(--blue); }
+.ws-past .ws-num { color:var(--muted); }
+.ws-badge { background:var(--amber); color:#fff; border-radius:99px; font-size:.67rem; font-weight:800; width:20px; height:20px; display:flex; align-items:center; justify-content:center; margin:0 auto; }
+.ws-badge.ws-badge-ok { background:var(--green); }
+.ws-dot { width:6px; height:6px; border-radius:50%; background:var(--line); margin:7px auto 0; }
+
+/* ---------- home shift cards (compact) ---------- */
+.hsc { background:#fff; border-left:4px solid; border-radius:12px; padding:10px 14px; margin-bottom:8px; box-shadow:var(--shadow); }
+.hsc-top { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:1px; }
+.hsc-date { font-weight:800; font-size:.92rem; color:var(--ink); }
+.hsc-time { font-size:.88rem; font-weight:700; color:var(--blue); }
+.hsc-title { font-size:.82rem; color:var(--muted); margin-bottom:6px; }
+.hsc-cowork { font-size:.78rem; color:var(--muted); margin-bottom:6px; }
+.hsc-bot { display:flex; align-items:center; gap:8px; }

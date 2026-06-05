@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 import db
 import auth
-from scheduling import generate_slots, monday_of
+from scheduling import generate_slots, generate_from_schedules, extend_to_horizon, monday_of
 
 HERE = os.path.dirname(__file__)
 STATIC = os.path.join(HERE, "static")
@@ -25,6 +25,8 @@ app = FastAPI(title="Arc Swim Rota")
 @app.on_event("startup")
 def _startup():
     db.init_db()
+    with db.get_db() as conn:
+        extend_to_horizon(conn)
 
 
 def now_iso():
@@ -108,7 +110,7 @@ def bootstrap(user=Depends(current_user)):
             "SELECT * FROM levels WHERE active = 1 ORDER BY sort_order").fetchall())
         return {
             "user": user_payload(conn, user),
-            "roles": roles, "levels": levels, "lanes": 6,
+            "roles": roles, "levels": levels,
             "server_date": date.today().isoformat(),
         }
 
@@ -183,7 +185,7 @@ def list_slots(request: Request, user=Depends(current_user)):
     sql = SLOT_SELECT
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY s.date, s.start_time, s.lane, r.sort_order"
+    sql += " ORDER BY s.date, s.start_time, r.sort_order"
     with db.get_db() as conn:
         return db.dict_rows(conn.execute(sql, params).fetchall())
 
@@ -292,9 +294,9 @@ async def create_slot(request: Request, admin=Depends(require_admin)):
         raise HTTPException(400, "date, start_time, end_time, role_id are required")
     with db.get_db() as conn:
         cur = conn.execute(
-            """INSERT INTO slots (date, start_time, end_time, level_id, lane, role_id, label, notes, status)
-               VALUES (?,?,?,?,?,?,?,?, 'open')""",
-            (b["date"], b["start_time"], b["end_time"], b.get("level_id"), b.get("lane"),
+            """INSERT INTO slots (date, start_time, end_time, level_id, role_id, label, notes, status)
+               VALUES (?,?,?,?,?,?,?, 'open')""",
+            (b["date"], b["start_time"], b["end_time"], b.get("level_id"),
              b["role_id"], b.get("label"), b.get("notes")))
         return {"ok": True, "id": cur.lastrowid}
 
@@ -365,7 +367,7 @@ def slots_week(request: Request, user=Depends(current_user)):
     with db.get_db() as conn:
         rows = conn.execute(f"""{SLOT_SELECT}
             WHERE s.date >= ? AND s.date <= ?
-            ORDER BY s.date, s.start_time, s.lane, r.sort_order""",
+            ORDER BY s.date, s.start_time, r.sort_order""",
             (monday.isoformat(), sunday.isoformat())).fetchall()
         return db.dict_rows(rows)
 
@@ -557,7 +559,7 @@ def get_templates(admin=Depends(require_admin)):
             SELECT t.*, r.name role_name, l.name level_name FROM templates t
             JOIN roles r ON r.id = t.role_id
             LEFT JOIN levels l ON l.id = t.level_id
-            ORDER BY t.weekday, t.start_time, t.lane""").fetchall()
+            ORDER BY t.weekday, t.start_time""").fetchall()
         return db.dict_rows(rows)
 
 
@@ -566,9 +568,9 @@ async def add_template(request: Request, admin=Depends(require_admin)):
     b = await request.json()
     with db.get_db() as conn:
         cur = conn.execute(
-            """INSERT INTO templates (weekday, start_time, end_time, level_id, lane, role_id, count, label)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (b["weekday"], b["start_time"], b["end_time"], b.get("level_id"), b.get("lane"),
+            """INSERT INTO templates (weekday, start_time, end_time, level_id, role_id, count, label)
+               VALUES (?,?,?,?,?,?,?)""",
+            (b["weekday"], b["start_time"], b["end_time"], b.get("level_id"),
              b["role_id"], b.get("count", 1), b.get("label")))
         return {"ok": True, "id": cur.lastrowid}
 
@@ -583,12 +585,81 @@ def delete_template(tid: int, admin=Depends(require_admin)):
 @app.post("/api/generate")
 async def generate(request: Request, admin=Depends(require_admin)):
     b = await request.json() if await _has_body(request) else {}
-    weeks = int(b.get("weeks", 4))
+    weeks = int(b.get("weeks", 26))
     start = monday_of(date.today())
     end = start + timedelta(weeks=weeks) - timedelta(days=1)
     with db.get_db() as conn:
-        created = generate_slots(conn, start, end)
+        created = generate_slots(conn, start, end) + generate_from_schedules(conn, start, end)
         return {"ok": True, "created": created, "from": start.isoformat(), "to": end.isoformat()}
+
+
+# ----------------------------------------------------------------------------
+# class schedules
+# ----------------------------------------------------------------------------
+@app.get("/api/class-schedules")
+def get_class_schedules(admin=Depends(require_admin)):
+    with db.get_db() as conn:
+        rows = conn.execute("""
+            SELECT ss.id, ss.schedule_id, cs.level_id, l.name level_name,
+                   cs.weekday, cs.start_time, cs.end_time,
+                   ss.role_id, r.name role_name, ss.user_id, u.full_name user_name, ss.count
+            FROM schedule_staff ss
+            JOIN class_schedules cs ON cs.id = ss.schedule_id
+            JOIN roles r ON r.id = ss.role_id
+            LEFT JOIN levels l ON l.id = cs.level_id
+            LEFT JOIN users u ON u.id = ss.user_id
+            WHERE cs.active = 1
+            ORDER BY cs.level_id, cs.weekday, cs.start_time, r.sort_order
+        """).fetchall()
+        return db.dict_rows(rows)
+
+
+@app.put("/api/class-schedules/level/{level_ref}")
+async def set_level_schedule(level_ref: str, request: Request, admin=Depends(require_admin)):
+    """Replace all class_schedule entries for a level.
+    level_ref: integer level_id, or 'duty' for pool-duty (level_id=NULL).
+    Body: {"sessions": [{"weekday":0,"start_time":"18:30","end_time":"19:00",
+                          "role_id":2,"user_id":5,"count":1}, ...]}
+    Sessions with identical (weekday, start_time, end_time) share one class_schedule row.
+    """
+    level_id = None if level_ref == "duty" else int(level_ref)
+    b = await request.json()
+    sessions = b.get("sessions", [])
+
+    with db.get_db() as conn:
+        # Delete existing schedules for this level
+        if level_id is None:
+            existing = [r["id"] for r in conn.execute(
+                "SELECT id FROM class_schedules WHERE level_id IS NULL").fetchall()]
+        else:
+            existing = [r["id"] for r in conn.execute(
+                "SELECT id FROM class_schedules WHERE level_id=?", (level_id,)).fetchall()]
+        for sid in existing:
+            conn.execute("DELETE FROM schedule_staff WHERE schedule_id=?", (sid,))
+        if level_id is None:
+            conn.execute("DELETE FROM class_schedules WHERE level_id IS NULL")
+        else:
+            conn.execute("DELETE FROM class_schedules WHERE level_id=?", (level_id,))
+
+        # Group sessions by (weekday, start_time, end_time) → one class_schedule per slot
+        slot_map: dict = {}
+        for s in sessions:
+            key = (s["weekday"], s["start_time"], s["end_time"])
+            if key not in slot_map:
+                slot_map[key] = []
+            slot_map[key].append(s)
+
+        for (wd, st, et), staff_list in slot_map.items():
+            cur = conn.execute(
+                "INSERT INTO class_schedules (level_id, weekday, start_time, end_time) VALUES (?,?,?,?)",
+                (level_id, wd, st, et))
+            sched_id = cur.lastrowid
+            for s in staff_list:
+                conn.execute(
+                    "INSERT INTO schedule_staff (schedule_id, role_id, user_id, count) VALUES (?,?,?,?)",
+                    (sched_id, s["role_id"], s.get("user_id"), s.get("count", 1)))
+
+        return {"ok": True, "slots": len(slot_map)}
 
 
 # ----------------------------------------------------------------------------
@@ -597,7 +668,7 @@ async def generate(request: Request, admin=Depends(require_admin)):
 def _outstanding_rows(conn, frm, to):
     return conn.execute(f"""{SLOT_SELECT}
         WHERE s.status != 'approved' AND s.date >= ? AND s.date <= ?
-        ORDER BY s.date, s.start_time, s.lane""", (frm, to)).fetchall()
+        ORDER BY s.date, s.start_time""", (frm, to)).fetchall()
 
 
 @app.get("/api/reports/outstanding")
@@ -619,10 +690,10 @@ def report_outstanding_csv(request: Request, admin=Depends(require_admin)):
         rows = _outstanding_rows(conn, frm, to)
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["Date", "Start", "End", "Class", "Lane", "Role", "Status", "Requested by"])
+    w.writerow(["Date", "Start", "End", "Class", "Role", "Status", "Requested by"])
     for r in rows:
         w.writerow([r["date"], r["start_time"], r["end_time"], r["level_name"] or "Pool duty",
-                    r["lane"] or "", r["role_name"], r["status"], r["assigned_name"] or ""])
+                    r["role_name"], r["status"], r["assigned_name"] or ""])
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f"attachment; filename=outstanding_{frm}_to_{to}.csv"})
 
