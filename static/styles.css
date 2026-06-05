@@ -349,6 +349,32 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
   padding:10px 14px; font-size:.85rem; font-weight:600; margin-bottom:10px;
 }
 
+/* ---------- compact approvals ---------- */
+.appr-row { display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid var(--line); }
+.appr-row:last-child { border-bottom:none; }
+.appr-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.appr-info { flex:1; min-width:0; font-size:.8rem; display:flex; gap:5px; align-items:center; flex-wrap:wrap; }
+.appr-name { font-weight:700; }
+.appr-role { font-weight:700; }
+.appr-time { color:var(--muted); font-size:.75rem; }
+.appr-sep { color:var(--line); }
+.appr-btns { display:flex; gap:4px; flex-shrink:0; }
+.appr-btns .btn { padding:5px 10px; font-size:.78rem; }
+
+/* ---------- compact outstanding rows + coverage bars ---------- */
+.osr-row { display:flex; align-items:center; gap:6px; padding:5px 0; border-bottom:1px solid var(--line); font-size:.8rem; }
+.osr-row:last-child { border-bottom:none; }
+.osr-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.osr-time { font-weight:700; white-space:nowrap; min-width:36px; }
+.osr-info { flex:1; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.osr-who { color:var(--amber); font-weight:700; white-space:nowrap; font-size:.75rem; }
+.cov-row { padding:7px 0; border-bottom:1px solid var(--line); }
+.cov-row:last-child { border-bottom:none; }
+.cov-date { font-size:.8rem; font-weight:700; min-width:56px; }
+.cov-bar-wrap { flex:1; height:7px; background:var(--line); border-radius:4px; overflow:hidden; min-width:50px; }
+.cov-bar-fill { height:100%; border-radius:4px; }
+.cov-detail { border-top:1px solid var(--line); margin-top:4px; }
+
 /* ---------- home weekly strip ---------- */
 .week-strip { display:flex; background:var(--blue-soft); border-radius:14px; padding:10px 2px; margin-bottom:16px; }
 .ws-day { flex:1; text-align:center; }

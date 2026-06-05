@@ -809,7 +809,7 @@ function groupByDate(slots) {
 // ------------------------------------------------------------------ ADMIN
 function viewAdmin() {
   screen().innerHTML = `
-    <h1 class="section-title">Admin</h1>
+    <h1 class="section-title" style="margin-top:14px">Admin</h1>
     <div class="tabs">
       <button data-atab="approvals" class="active">Approvals</button>
       <button data-atab="reports">Reports</button>
@@ -827,36 +827,152 @@ function viewAdmin() {
 }
 
 async function adminApprovals() {
-  const body = $("#adminBody"); body.innerHTML = `<div class="spinner"></div>`;
+  const body = $("#adminBody");
+  body.innerHTML = `<div class="spinner"></div>`;
   let pending = [];
-  try { pending = await api(`/api/slots?pending=1`); } catch (err) { toast(err.message, "err"); }
-  if (!pending.length) { body.innerHTML = `<div class="empty"><div class="big">✅</div>No requests waiting. All caught up!</div>`; return; }
-  body.innerHTML = pending.sort((a, b) => (a.date + a.start_time).localeCompare(b.date + b.start_time)).map((s) => `
-    <div class="card">
-      <div class="between">
-        <div>
-          <strong>${esc(s.assigned_name)}</strong> · <span style="color:${roleColor(s.role_id)}">${esc(roleName(s.role_id))}</span>
-          <div class="small muted">${fmtDate(s.date)} · ${s.start_time}–${s.end_time} · ${esc(s.level_name || "Pool duty")}</div>
+  try { pending = await api(`/api/slots?pending=1`); } catch (err) { toast(err.message, "err"); return; }
+
+  if (!pending.length) {
+    body.innerHTML = `<div class="empty"><div class="big">✅</div>No requests waiting. All caught up!</div>`;
+    return;
+  }
+
+  // Unique roles + levels present in the pending list
+  const rolesInPending = [...new Map(pending.map((s) => [s.role_id, { id: s.role_id, name: s.role_name, color: s.role_color }])).values()];
+  const levelsInPending = [...new Map(pending.filter((s) => s.level_name).map((s) => [s.level_id, { id: s.level_id, name: s.level_name }])).values()];
+  const hasDuty = pending.some((s) => !s.level_id);
+
+  if (State._appRoleFilter === undefined) State._appRoleFilter = null;
+  if (State._appLevelFilter === undefined) State._appLevelFilter = null;
+
+  function filtered() {
+    let s = pending;
+    if (State._appRoleFilter) s = s.filter((x) => x.role_id === State._appRoleFilter);
+    if (State._appLevelFilter === "duty") s = s.filter((x) => !x.level_id);
+    else if (State._appLevelFilter) s = s.filter((x) => x.level_id === State._appLevelFilter);
+    return s.slice().sort((a, b) => (a.date + a.start_time).localeCompare(b.date + b.start_time));
+  }
+
+  function renderRows() {
+    const rows = document.getElementById("apprRows");
+    const countEl = document.getElementById("apprCount");
+    const list = filtered();
+    if (countEl) countEl.textContent = `${list.length} request${list.length !== 1 ? "s" : ""}`;
+    if (!rows) return;
+    if (!list.length) { rows.innerHTML = `<div class="small muted" style="padding:10px 0">No requests match this filter.</div>`; return; }
+    rows.innerHTML = list.map((s) => {
+      const fn = s.assigned_name?.split(" ")[0] || s.assigned_name;
+      const lvl = s.level_name ? s.level_name.replace("Parents & Toddlers", "P&T").replace("Level ", "L") : "Pool duty";
+      const dateStr = fmtDate(s.date).replace(/\s\d{4}/, "");
+      return `<div class="appr-row">
+        <span class="appr-dot" style="background:${roleColor(s.role_id)}"></span>
+        <div class="appr-info">
+          <span class="appr-name">${esc(fn)}</span>
+          <span class="appr-role" style="color:${roleColor(s.role_id)}">${esc(roleName(s.role_id))}</span>
+          <span class="appr-sep">·</span>
+          <span>${esc(lvl)}</span>
+          <span class="appr-sep">·</span>
+          <span class="appr-time">${dateStr} ${s.start_time}</span>
         </div>
-        <span class="pill requested">Pending</span>
-      </div>
-      <div class="row" style="margin-top:12px">
-        <button class="btn green sm" data-approve="${s.id}">Approve</button>
-        <button class="btn danger sm" data-reject="${s.id}">Decline</button>
-      </div>
-    </div>`).join("");
-  body.querySelectorAll("[data-approve]").forEach((b) => b.addEventListener("click", async () => {
-    b.disabled = true;
-    try { await api(`/api/slots/${b.dataset.approve}/approve`, { method: "POST" }); toast("Approved", "ok"); await refreshNotif(); adminApprovals(); }
-    catch (err) { toast(err.message, "err"); b.disabled = false; }
+        <div class="appr-btns">
+          <button class="btn green sm" data-approve="${s.id}" title="Approve">✓</button>
+          <button class="btn danger sm" data-reject="${s.id}" title="Decline">✗</button>
+        </div>
+      </div>`;
+    }).join("");
+
+    rows.querySelectorAll("[data-approve]").forEach((b) => b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        await api(`/api/slots/${b.dataset.approve}/approve`, { method: "POST" });
+        toast("Approved", "ok");
+        await refreshNotif();
+        const i = pending.findIndex((s) => s.id === Number(b.dataset.approve));
+        if (i > -1) pending.splice(i, 1);
+        renderRows();
+      } catch (err) { toast(err.message, "err"); b.disabled = false; }
+    }));
+
+    rows.querySelectorAll("[data-reject]").forEach((b) => b.addEventListener("click", async () => {
+      const reason = prompt("Reason for declining (optional — sent as a direct message to the person):") ?? null;
+      if (reason === null && !confirm("Decline without a reason?")) return;
+      b.disabled = true;
+      try {
+        await api(`/api/slots/${b.dataset.reject}/reject`, { method: "POST", body: { reason } });
+        toast("Declined", "ok");
+        const i = pending.findIndex((s) => s.id === Number(b.dataset.reject));
+        if (i > -1) pending.splice(i, 1);
+        renderRows();
+      } catch (err) { toast(err.message, "err"); b.disabled = false; }
+    }));
+  }
+
+  const roleChips = [
+    `<button class="filterchip${!State._appRoleFilter ? " active" : ""}" data-arole="">All roles</button>`,
+    ...rolesInPending.map((r) => `<button class="filterchip${State._appRoleFilter === r.id ? " active" : ""}" data-arole="${r.id}"
+       style="${State._appRoleFilter === r.id ? `background:${r.color};border-color:${r.color}` : `border-color:${r.color};color:${r.color}`}">${esc(r.name)}</button>`),
+  ].join("");
+
+  const levelChips = [
+    `<button class="filterchip${!State._appLevelFilter ? " active" : ""}" data-alevel="">All classes</button>`,
+    ...(hasDuty ? [`<button class="filterchip${State._appLevelFilter === "duty" ? " active" : ""}" data-alevel="duty">Pool duty</button>`] : []),
+    ...levelsInPending.map((l) => `<button class="filterchip${State._appLevelFilter === l.id ? " active" : ""}" data-alevel="${l.id}">${esc(l.name.replace("Parents & Toddlers", "P&T").replace("Level ", "L"))}</button>`),
+  ].join("");
+
+  body.innerHTML = `
+    <div style="margin-bottom:6px">
+      <div class="filterbar" style="flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px">${roleChips}</div>
+      <div class="filterbar" style="flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px">${levelChips}</div>
+    </div>
+    <div class="between" style="margin-bottom:8px">
+      <span class="small muted" id="apprCount"></span>
+      <button class="btn green sm" id="approveAllBtn">✓ Approve all</button>
+    </div>
+    <div id="apprRows"></div>`;
+
+  renderRows();
+
+  body.querySelectorAll("[data-arole]").forEach((b) => b.addEventListener("click", () => {
+    State._appRoleFilter = b.dataset.arole ? Number(b.dataset.arole) : null;
+    body.querySelectorAll("[data-arole]").forEach((x) => {
+      const rid = x.dataset.arole ? Number(x.dataset.arole) : null;
+      const active = rid === State._appRoleFilter;
+      x.classList.toggle("active", active);
+      const r = State.roles.find((r) => r.id === rid);
+      if (r) { x.style.background = active ? r.color : ""; x.style.borderColor = r.color; x.style.color = active ? "" : r.color; }
+      else { x.style.background = ""; x.style.borderColor = ""; x.style.color = ""; }
+    });
+    renderRows();
   }));
-  body.querySelectorAll("[data-reject]").forEach((b) => b.addEventListener("click", async () => {
-    const reason = prompt("Reason for declining (optional):") ?? null;
-    if (reason === null && !confirm("Decline without a reason?")) return;
-    b.disabled = true;
-    try { await api(`/api/slots/${b.dataset.reject}/reject`, { method: "POST", body: { reason } }); toast("Declined", "ok"); adminApprovals(); }
-    catch (err) { toast(err.message, "err"); b.disabled = false; }
+
+  body.querySelectorAll("[data-alevel]").forEach((b) => b.addEventListener("click", () => {
+    const v = b.dataset.alevel;
+    State._appLevelFilter = v === "" ? null : v === "duty" ? "duty" : Number(v);
+    body.querySelectorAll("[data-alevel]").forEach((x) =>
+      x.classList.toggle("active", x.dataset.alevel === (State._appLevelFilter === null ? "" : String(State._appLevelFilter))));
+    renderRows();
   }));
+
+  document.getElementById("approveAllBtn").addEventListener("click", async () => {
+    const list = filtered();
+    if (!list.length) return toast("Nothing to approve", "err");
+    if (!confirm(`Approve ${list.length} shift${list.length !== 1 ? "s" : ""}?`)) return;
+    const btn = document.getElementById("approveAllBtn");
+    btn.disabled = true; btn.textContent = "Approving…";
+    let done = 0;
+    for (const s of [...list]) {
+      try {
+        await api(`/api/slots/${s.id}/approve`, { method: "POST" });
+        done++;
+        const i = pending.findIndex((x) => x.id === s.id);
+        if (i > -1) pending.splice(i, 1);
+      } catch {}
+    }
+    toast(`Approved ${done} shifts`, "ok");
+    await refreshNotif();
+    renderRows();
+    btn.disabled = false; btn.textContent = "✓ Approve all";
+  });
 }
 
 async function adminReports() {
@@ -883,26 +999,41 @@ async function reportOutstanding() {
     const byDate = {};
     for (const s of data.rows) (byDate[s.date] ||= []).push(s);
     rb.innerHTML = `
-      <div class="between" style="margin-bottom:10px">
-        <span class="muted small">${data.count} unfilled position${data.count !== 1 ? "s" : ""} (next 4 weeks)</span>
-        <a class="btn sub sm" href="/api/reports/outstanding.csv" id="csvBtn">⬇ CSV</a>
+      <div class="between" style="margin-bottom:8px">
+        <span class="muted small">${data.count} unfilled (next 4 weeks)</span>
+        <button class="btn sub sm" id="csvBtn">⬇ CSV</button>
       </div>
-      ${data.count === 0 ? `<div class="empty"><div class="big">🎉</div>Every shift is approved!</div>` :
-        Object.keys(byDate).sort().map((d) => `
-          <div class="day-head">${fmtDate(d)}</div>
-          ${byDate[d].map((s) => `<div class="list-item">
-            <div><span style="color:${roleColor(s.role_id)};font-weight:700">${esc(roleName(s.role_id))}</span>
-              <div class="small muted">${s.start_time}–${s.end_time} · ${esc(s.level_name || "Pool duty")}</div></div>
-            ${s.status === "requested" ? `<span class="pill requested">Pending: ${esc(s.assigned_name)}</span>` : `<span class="pill open">Open</span>`}
-          </div>`).join("")}`).join("")}`;
-    // CSV needs auth header; intercept and download as blob
-    $("#csvBtn").addEventListener("click", async (e) => {
-      e.preventDefault();
-      const res = await api(`/api/reports/outstanding.csv`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = "outstanding_shifts.csv"; a.click();
-      URL.revokeObjectURL(url);
+      ${data.count === 0
+        ? `<div class="empty"><div class="big">🎉</div>Every shift is approved!</div>`
+        : Object.keys(byDate).sort().map((d) => `
+            <div class="day-head" style="margin-top:10px;margin-bottom:2px">${fmtDate(d)}</div>
+            ${byDate[d].map((s) => {
+              const isPending = s.status === "requested";
+              return `<div class="osr-row">
+                <span class="osr-dot" style="background:${roleColor(s.role_id)}"></span>
+                <span class="osr-time">${s.start_time}</span>
+                <span class="osr-info">${esc(s.level_name || "Pool")} · ${esc(roleName(s.role_id))}</span>
+                ${isPending
+                  ? `<span class="osr-who">⏳ ${esc(s.assigned_name?.split(" ")[0] || "")}</span>
+                     <button class="btn green sm" style="padding:4px 10px;font-size:.7rem" data-approve="${s.id}">✓</button>`
+                  : `<span class="pill open" style="font-size:.65rem;padding:1px 6px">Open</span>`}
+              </div>`;
+            }).join("")}`
+          ).join("")}`;
+
+    rb.querySelectorAll("[data-approve]").forEach((b) => b.addEventListener("click", async () => {
+      b.disabled = true;
+      try { await api(`/api/slots/${b.dataset.approve}/approve`, { method: "POST" }); toast("Approved", "ok"); await refreshNotif(); reportOutstanding(); }
+      catch (err) { toast(err.message, "err"); b.disabled = false; }
+    }));
+    $("#csvBtn")?.addEventListener("click", async () => {
+      try {
+        const res = await api(`/api/reports/outstanding.csv`);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a"); a.href = url; a.download = "outstanding_shifts.csv"; a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) { toast(err.message, "err"); }
     });
   } catch (err) { rb.innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; }
 }
@@ -915,12 +1046,49 @@ async function reportCoverage() {
     rb.innerHTML = data.days.map((d) => {
       const pct = Math.round((d.approved / d.total) * 100);
       const col = pct === 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)";
-      return `<div class="list-item">
-        <div><strong>${fmtDate(d.date)}</strong>
-          <div class="small muted">${d.approved}/${d.total} approved · ${d.requested} pending · ${d.open} open</div></div>
-        <div style="text-align:right"><div class="statnum" style="font-size:1.1rem;color:${col}">${pct}%</div></div>
+      const needsWork = d.open > 0 || d.requested > 0;
+      return `<div class="cov-row">
+        <div class="between" style="gap:8px">
+          <span class="cov-date">${fmtDate(d.date).slice(0, 6)}</span>
+          <div class="cov-bar-wrap"><div class="cov-bar-fill" style="width:${pct}%;background:${col}"></div></div>
+          <span style="color:${col};font-weight:800;font-size:.8rem;min-width:32px;text-align:right">${pct}%</span>
+          <span class="small muted" style="min-width:44px;font-size:.7rem;text-align:right">${d.approved}/${d.total}</span>
+          ${needsWork
+            ? `<button class="btn sub sm cov-btn" style="padding:3px 8px;font-size:.72rem;flex-shrink:0" data-covday="${d.date}">＋</button>`
+            : `<span style="width:38px;flex-shrink:0"></span>`}
+        </div>
+        <div class="cov-detail" id="cov-${d.date}" style="display:none;padding-top:6px"></div>
       </div>`;
     }).join("");
+
+    rb.querySelectorAll(".cov-btn").forEach((b) => b.addEventListener("click", async () => {
+      const date = b.dataset.covday;
+      const detail = document.getElementById(`cov-${date}`);
+      if (!detail) return;
+      if (detail.style.display !== "none") { detail.style.display = "none"; b.textContent = "＋"; return; }
+      b.textContent = "−"; detail.style.display = "block";
+      detail.innerHTML = `<div class="spinner" style="width:18px;height:18px;border-width:2px;margin:6px auto"></div>`;
+      try {
+        const slots = await api(`/api/slots?from=${date}&to=${date}`);
+        const unfinished = slots.filter((s) => s.status !== "approved").sort((a, b) => a.start_time.localeCompare(b.start_time));
+        if (!unfinished.length) { detail.innerHTML = `<div class="small muted" style="padding:4px">All approved ✓</div>`; return; }
+        detail.innerHTML = unfinished.map((s) => `
+          <div class="osr-row" style="padding:4px 0">
+            <span class="osr-dot" style="background:${roleColor(s.role_id)}"></span>
+            <span class="osr-time">${s.start_time}</span>
+            <span class="osr-info">${esc(s.level_name || "Pool")} · ${esc(s.role_name)}</span>
+            ${s.status === "requested"
+              ? `<span class="osr-who">⏳ ${esc(s.assigned_name?.split(" ")[0] || "")}</span>
+                 <button class="btn green sm" style="padding:3px 8px;font-size:.7rem" data-approve="${s.id}">✓</button>`
+              : `<span class="pill open" style="font-size:.65rem;padding:1px 6px">Open</span>`}
+          </div>`).join("");
+        detail.querySelectorAll("[data-approve]").forEach((ab) => ab.addEventListener("click", async () => {
+          ab.disabled = true;
+          try { await api(`/api/slots/${ab.dataset.approve}/approve`, { method: "POST" }); toast("Approved", "ok"); await refreshNotif(); ab.closest(".osr-row").remove(); }
+          catch (err) { toast(err.message, "err"); ab.disabled = false; }
+        }));
+      } catch (err) { detail.innerHTML = `<div class="small muted">${esc(err.message)}</div>`; }
+    }));
   } catch (err) { rb.innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; }
 }
 
@@ -1493,10 +1661,15 @@ async function adminDayView() {
             </div>`;
           }).join("");
 
-          return `<div class="card" style="margin-bottom:8px">
-            <div class="between" style="margin-bottom:${classMap.size ? "8px" : "0"}">
-              <strong>${time}–${end}</strong>
-              ${duty.length ? `<span class="small muted">🛟 ${dutyApproved}/${duty.length} lifeguard${duty.length !== 1 ? "s" : ""}</span>` : ""}
+          const lgShort = duty.length > 0 && dutyApproved < duty.length;
+          return `<div class="card" style="margin-bottom:6px;padding:10px 14px${lgShort ? ";border-left:4px solid var(--red)" : ""}">
+            <div class="between" style="margin-bottom:${classMap.size ? "6px" : "0"}">
+              <strong style="font-size:.88rem">${time}–${end}</strong>
+              ${duty.length
+                ? `<span style="font-size:.78rem;font-weight:700;color:${lgShort ? "var(--red)" : "var(--green)"}">
+                     ${lgShort ? "⚠️" : "✓"} ${dutyApproved}/${duty.length} LG
+                   </span>`
+                : ""}
             </div>
             ${classMap.size ? `<div style="border-top:1px solid var(--line);padding-top:4px">${classRows}</div>` : ""}
           </div>`;

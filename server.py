@@ -282,6 +282,9 @@ def approve_slot(slot_id: int, admin=Depends(require_admin)):
 async def reject_slot(slot_id: int, request: Request, admin=Depends(require_admin)):
     body = await request.json() if await _has_body(request) else {}
     reason = (body.get("reason") or "").strip()
+    dm_cid = None
+    dm_mid = None
+    dm_msg = None
     with db.get_db() as conn:
         s = _get_slot(conn, slot_id)
         if s["status"] != "requested":
@@ -289,13 +292,30 @@ async def reject_slot(slot_id: int, request: Request, admin=Depends(require_admi
         uid = s["assigned_user_id"]
         conn.execute("""UPDATE slots SET assigned_user_id=NULL, status='open',
                         requested_at=NULL WHERE id=?""", (slot_id,))
-        msg = f"❌ Your request for {s['label'] or 'a shift'} on {s['date']} {s['start_time']} was declined."
+        dm_msg = f"❌ Your shift request for {s['label'] or 'a shift'} on {s['date']} at {s['start_time']} was declined."
         if reason:
-            msg += f" Reason: {reason}"
-        notify_user(conn, uid, msg)
+            dm_msg += f"\n\nReason: {reason}"
+        notify_user(conn, uid, dm_msg.split("\n")[0])
+        # Also post directly to the person's DM channel so they see it in Messages
+        dm_ch = conn.execute(
+            "SELECT id FROM channels WHERE dm_user_id=? AND type='dm' AND active=1", (uid,)
+        ).fetchone()
+        if dm_ch:
+            ts = now_iso()
+            cur = conn.execute(
+                "INSERT INTO messages (channel_id, user_id, body, sent_at) VALUES (?,?,?,?)",
+                (dm_ch["id"], admin["id"], dm_msg, ts))
+            dm_cid = dm_ch["id"]
+            dm_mid = cur.lastrowid
         conn.execute("INSERT INTO audit (ts, user_id, action, detail) VALUES (?,?,?,?)",
                      (now_iso(), admin["id"], "reject", f"slot {slot_id}: {reason}"))
-        return {"ok": True}
+    if dm_cid and dm_mid:
+        _fanout(dm_cid, {
+            "id": dm_mid, "channel_id": dm_cid, "body": dm_msg,
+            "sent_at": now_iso(), "user_id": admin["id"],
+            "full_name": admin["full_name"], "username": admin["username"],
+        })
+    return {"ok": True}
 
 
 @app.post("/api/slots/{slot_id}/assign")
