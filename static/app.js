@@ -158,25 +158,43 @@ function disconnectSSE() {
 }
 
 function handleLiveMessage(msg) {
-  // Deleted message
   if (msg.deleted) {
     const bubble = document.querySelector(`[data-mid="${msg.id}"]`);
     if (bubble) bubble.remove();
     return;
   }
-  // If the conversation is open for this channel, append the bubble
   if (State.view === "messages" && State.activeChannel === msg.channel_id) {
     appendBubble(msg);
     scrollChatBottom();
+    // Mark as read immediately since the user is looking at it
+    if (msg.user_id !== State.user?.id) {
+      api(`/api/channels/${msg.channel_id}/read`, { method: "POST" }).catch(() => {});
+    }
   } else {
-    // Badge on Messages nav for messages in other channels
-    if (msg.user_id !== State.user?.id) updateMsgBadge(1);
+    if (msg.user_id !== State.user?.id) {
+      updateMsgBadge(1);
+      // Increment per-channel unread in cache and update badge in DOM if visible
+      const ch = State._channels.find((c) => c.id === msg.channel_id);
+      if (ch) {
+        ch.unread = (ch.unread || 0) + 1;
+        const badge = document.querySelector(`[data-ch-unread="${msg.channel_id}"]`);
+        if (badge) {
+          badge.textContent = ch.unread > 99 ? "99+" : ch.unread;
+        } else {
+          const row = document.querySelector(`[data-ch="${msg.channel_id}"] .between`);
+          if (row) {
+            const b = document.createElement("span");
+            b.className = "ch-unread";
+            b.dataset.chUnread = msg.channel_id;
+            b.textContent = ch.unread;
+            row.appendChild(b);
+          }
+        }
+      }
+    }
   }
-  // Update channel list preview if visible
   const preview = document.querySelector(`[data-ch-preview="${msg.channel_id}"]`);
-  if (preview && !msg.deleted) {
-    preview.textContent = msg.body.slice(0, 60);
-  }
+  if (preview) preview.textContent = msg.body.slice(0, 60);
 }
 
 // ------------------------------------------------------------------ shell
@@ -1076,18 +1094,16 @@ function buildRotaGrid(roleSlots, times, weekStart) {
       const key = `${time}|${day.iso}`;
       const ss = slotMap[key] || [];
       if (!ss.length) return `<td class="rg-cell rg-empty"></td>`;
-      return ss.map((s) => {
+      // All slots for this day/time go into ONE <td> to keep column count stable
+      return `<td class="rg-cell">${ss.map((s) => {
         const isPast = day.iso < today;
         const taken = s.status !== "open";
         const name = s.assigned_name ? s.assigned_name.split(" ")[0] : null;
         const cls = taken ? (s.status === "approved" ? "rg-taken-ok" : "rg-taken-pending") : isPast ? "rg-past" : "rg-open";
-        const label = s.level_name
-          ? s.level_name.replace("Parents & Toddlers", "P&T").replace("Level ", "L")
-          : (name || "Open");
-        return `<td class="rg-cell"><div class="rb-cell ${cls}" data-sid="${s.id}"${taken ? ` data-taken="1" title="${name || s.status}"` : ""}>
+        return `<div class="rb-cell ${cls}" data-sid="${s.id}"${taken ? ` data-taken="1" title="${name || s.status}"` : ""} style="margin-bottom:2px">
           ${taken ? esc(name || s.status) : "Open"}
-        </div></td>`;
-      }).join("");
+        </div>`;
+      }).join("")}</td>`;
     }).join("");
     return `<tr><td class="rg-time">${time}</td>${cells}</tr>`;
   }).join("");
@@ -1553,11 +1569,14 @@ async function viewProfile() {
 // ------------------------------------------------------------------ MESSAGES
 async function viewMessages() {
   loading();
-  State.msgUnread = 0;
-  updateMsgBadge(0 - State.msgUnread);
   try {
     State._channels = await api("/api/channels");
   } catch (err) { screen().innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; return; }
+
+  // Sync global badge with server-reported unreads
+  const totalUnread = State._channels.reduce((s, c) => s + (c.unread || 0), 0);
+  State.msgUnread = 0;
+  updateMsgBadge(totalUnread);
 
   if (State.activeChannel) {
     const ch = State._channels.find((c) => c.id === State.activeChannel);
@@ -1567,28 +1586,52 @@ async function viewMessages() {
   renderChannelList();
 }
 
+function chRow(ch) {
+  const avatar = ch.type === "dm" ? "💬" : esc(ch.name[0]);
+  const preview = ch.last_message
+    ? esc(ch.last_message.full_name.split(" ")[0] + ": " + ch.last_message.body.slice(0, 60))
+    : `<span class="muted">No messages yet</span>`;
+  const badge = ch.unread
+    ? `<span class="ch-unread" data-ch-unread="${ch.id}">${ch.unread > 99 ? "99+" : ch.unread}</span>`
+    : "";
+  return `
+    <div class="ch-row" data-ch="${ch.id}">
+      <div class="ch-avatar${ch.type === "dm" ? " ch-avatar-dm" : ""}" style="background:${ch.color}">${avatar}</div>
+      <div class="ch-info">
+        <div class="between">
+          <strong>${esc(ch.name)}</strong>
+          ${badge}
+        </div>
+        <div class="ch-preview" data-ch-preview="${ch.id}">${preview}</div>
+      </div>
+    </div>`;
+}
+
 function renderChannelList() {
   State.activeChannel = null;
   const chs = State._channels;
+  const dms = chs.filter((c) => c.type === "dm");
+  const channels = chs.filter((c) => c.type !== "dm");
+  const hasBoth = dms.length > 0 && channels.length > 0;
+
+  let body = "";
+  if (!chs.length) {
+    body = `<div class="empty"><div class="big">💬</div>You're not in any channels yet.<br/><span class="small muted">Ask an admin to add you.</span></div>`;
+  } else {
+    if (dms.length) {
+      body += `${hasBoth ? `<div class="ch-section">Direct Messages</div>` : ""}${dms.map(chRow).join("")}`;
+    }
+    if (channels.length) {
+      body += `${hasBoth ? `<div class="ch-section">Channels</div>` : ""}${channels.map(chRow).join("")}`;
+    }
+  }
+
   screen().innerHTML = `
     <div class="between" style="margin-bottom:14px">
       <h1 class="section-title" style="margin:0">Messages</h1>
       ${State.user.is_admin ? `<button class="btn sub sm" id="newChBtn">＋ New channel</button>` : ""}
     </div>
-    ${!chs.length ? `<div class="empty"><div class="big">💬</div>You're not in any channels yet.<br/><span class="small muted">Ask an admin to add you.</span></div>` :
-      chs.map((ch) => `
-        <div class="ch-row" data-ch="${ch.id}">
-          <div class="ch-avatar" style="background:${ch.color}">${esc(ch.name[0])}</div>
-          <div class="ch-info">
-            <div class="between">
-              <strong>${esc(ch.name)}</strong>
-              <span class="small muted">${ch.member_count} member${ch.member_count !== 1 ? "s" : ""}</span>
-            </div>
-            <div class="ch-preview" data-ch-preview="${ch.id}">${ch.last_message
-              ? esc(ch.last_message.full_name.split(" ")[0] + ": " + ch.last_message.body.slice(0, 60))
-              : `<span class="muted">No messages yet</span>`}</div>
-          </div>
-        </div>`).join("")}
+    ${body}
     ${State.user.is_admin ? `<div class="divider"></div><button class="btn ghost block" id="manageChBtn" style="margin-top:4px">Manage channels</button>` : ""}
   `;
   screen().querySelectorAll("[data-ch]").forEach((el) =>
@@ -1602,15 +1645,26 @@ function renderChannelList() {
 
 async function openChannel(ch) {
   State.activeChannel = ch.id;
+  // Clear per-channel unread and adjust global badge
+  const cached = State._channels.find((c) => c.id === ch.id);
+  if (cached && cached.unread) {
+    updateMsgBadge(-cached.unread);
+    cached.unread = 0;
+  }
+  const isDm = ch.type === "dm";
+  const avatarLabel = isDm ? "💬" : esc(ch.name[0]);
+  const subtitle = isDm
+    ? (ch.dm_user_id === State.user.id ? "Your direct line to admins" : "Direct message thread")
+    : `${ch.member_count} member${ch.member_count !== 1 ? "s" : ""}`;
   screen().innerHTML = `
     <div class="chat-header">
       <button class="btn sub sm" id="chatBack">‹ Back</button>
-      <div class="ch-avatar sm" style="background:${ch.color}">${esc(ch.name[0])}</div>
+      <div class="ch-avatar sm${isDm ? " ch-avatar-dm" : ""}" style="background:${ch.color}">${avatarLabel}</div>
       <div>
         <strong>${esc(ch.name)}</strong>
-        <div class="small muted">${ch.member_count} member${ch.member_count !== 1 ? "s" : ""}</div>
+        <div class="small muted">${subtitle}</div>
       </div>
-      ${State.user.is_admin ? `<button class="btn sub sm" style="margin-left:auto" id="chEditBtn">Edit</button>` : ""}
+      ${State.user.is_admin && !isDm ? `<button class="btn sub sm" style="margin-left:auto" id="chEditBtn">Edit</button>` : ""}
     </div>
     <div class="chat-body" id="chatBody"><div class="spinner"></div></div>
     <div class="chat-input-bar">

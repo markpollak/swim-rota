@@ -163,6 +163,14 @@ CREATE TABLE IF NOT EXISTS schedule_staff (
 
 CREATE INDEX IF NOT EXISTS idx_cs_level ON class_schedules(level_id, weekday);
 CREATE INDEX IF NOT EXISTS idx_ss_sched ON schedule_staff(schedule_id);
+
+-- Tracks the last message each user has read per channel, for unread counts.
+CREATE TABLE IF NOT EXISTS channel_reads (
+    channel_id  INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    last_read_id INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (channel_id, user_id)
+);
 """
 
 
@@ -188,6 +196,15 @@ def get_db():
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
+        # Migrations: add columns to channels if they don't exist yet
+        for stmt in [
+            "ALTER TABLE channels ADD COLUMN type TEXT NOT NULL DEFAULT 'channel'",
+            "ALTER TABLE channels ADD COLUMN dm_user_id INTEGER",
+        ]:
+            try:
+                conn.execute(stmt)
+            except Exception:
+                pass
 
 
 def dict_rows(rows):

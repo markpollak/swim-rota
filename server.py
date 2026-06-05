@@ -22,11 +22,42 @@ STATIC = os.path.join(HERE, "static")
 app = FastAPI(title="Arc Swim Rota")
 
 
+def ensure_dm_channels(conn):
+    """Auto-create a DM channel for every active user (with all admins as members).
+    Idempotent — safe to call repeatedly.
+    """
+    users = conn.execute("SELECT id, full_name FROM users WHERE active=1").fetchall()
+    admins = conn.execute("SELECT id FROM users WHERE is_admin=1 AND active=1").fetchall()
+    if not admins:
+        return  # Nothing to create without at least one admin
+    for user in users:
+        existing = conn.execute(
+            "SELECT id FROM channels WHERE dm_user_id=? AND type='dm'",
+            (user["id"],)
+        ).fetchone()
+        if existing:
+            cid = existing["id"]
+        else:
+            cur = conn.execute(
+                """INSERT INTO channels (name, description, color, created_at, type, dm_user_id)
+                   VALUES (?,?,?,?,?,?)""",
+                (f"dm:{user['id']}", "", "#26358B", now_iso(), "dm", user["id"])
+            )
+            cid = cur.lastrowid
+        # Ensure the user and all admins are members
+        for uid in [user["id"]] + [a["id"] for a in admins]:
+            conn.execute(
+                "INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at) VALUES (?,?,?)",
+                (cid, uid, now_iso())
+            )
+
+
 @app.on_event("startup")
 def _startup():
     db.init_db()
     with db.get_db() as conn:
         extend_to_horizon(conn)
+        ensure_dm_channels(conn)
 
 
 def now_iso():
@@ -400,6 +431,8 @@ async def create_user(request: Request, admin=Depends(require_admin)):
         uid = cur.lastrowid
         for rid in b.get("role_ids", []):
             conn.execute("INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?,?)", (uid, rid))
+        # Auto-create DM channel for the new user
+        ensure_dm_channels(conn)
         return {"ok": True, "id": uid}
 
 
@@ -786,7 +819,7 @@ def _user_channel_ids(conn, user_id: int):
     return [r["channel_id"] for r in rows]
 
 
-def _channel_payload(conn, ch):
+def _channel_payload(conn, ch, requesting_uid=None):
     last = conn.execute(
         """SELECT m.body, m.sent_at, u.full_name FROM messages m
            JOIN users u ON u.id=m.user_id
@@ -794,10 +827,36 @@ def _channel_payload(conn, ch):
         (ch["id"],)).fetchone()
     count = conn.execute(
         "SELECT COUNT(*) c FROM channel_members WHERE channel_id=?", (ch["id"],)).fetchone()["c"]
+
+    # Unread count: messages after the user's last read
+    unread = 0
+    if requesting_uid:
+        row = conn.execute(
+            "SELECT last_read_id FROM channel_reads WHERE channel_id=? AND user_id=?",
+            (ch["id"], requesting_uid)).fetchone()
+        last_read_id = row["last_read_id"] if row else 0
+        unread = conn.execute(
+            """SELECT COUNT(*) c FROM messages
+               WHERE channel_id=? AND id > ? AND deleted=0 AND user_id != ?""",
+            (ch["id"], last_read_id, requesting_uid)).fetchone()["c"]
+
+    # DM display name: "Message Admins" for the DM owner; user's full name for admins
+    display_name = ch["name"]
+    ch_type = ch["type"] if "type" in ch.keys() else "channel"
+    dm_user_id = ch["dm_user_id"] if "dm_user_id" in ch.keys() else None
+    if ch_type == "dm" and dm_user_id:
+        if dm_user_id == requesting_uid:
+            display_name = "Message Admins"
+        else:
+            dm_user = conn.execute(
+                "SELECT full_name FROM users WHERE id=?", (dm_user_id,)).fetchone()
+            display_name = dm_user["full_name"] if dm_user else ch["name"]
+
     return {
-        "id": ch["id"], "name": ch["name"], "description": ch["description"],
+        "id": ch["id"], "name": display_name, "description": ch["description"],
         "color": ch["color"], "member_count": count,
         "last_message": dict(last) if last else None,
+        "unread": unread, "type": ch_type, "dm_user_id": dm_user_id,
     }
 
 
@@ -805,14 +864,16 @@ def _channel_payload(conn, ch):
 def list_channels(user=Depends(current_user)):
     with db.get_db() as conn:
         if user["is_admin"]:
-            rows = conn.execute("SELECT * FROM channels WHERE active=1 ORDER BY name").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM channels WHERE active=1 ORDER BY type DESC, name"
+            ).fetchall()
         else:
             rows = conn.execute(
                 """SELECT c.* FROM channels c
                    JOIN channel_members cm ON cm.channel_id=c.id
-                   WHERE cm.user_id=? AND c.active=1 ORDER BY c.name""",
+                   WHERE cm.user_id=? AND c.active=1 ORDER BY c.type DESC, c.name""",
                 (user["id"],)).fetchall()
-        return [_channel_payload(conn, r) for r in rows]
+        return [_channel_payload(conn, r, user["id"]) for r in rows]
 
 
 @app.post("/api/channels")
@@ -884,7 +945,15 @@ def get_messages(cid: int, request: Request, user=Depends(current_user)):
                 FROM messages m JOIN users u ON u.id=m.user_id
                 WHERE m.channel_id=? {extra} AND m.deleted=0
                 ORDER BY m.id DESC LIMIT 60""", params).fetchall()
-        return list(reversed(db.dict_rows(rows)))
+        msgs = list(reversed(db.dict_rows(rows)))
+        # Mark channel as read up to the latest message fetched
+        if msgs and not before:
+            max_id = msgs[-1]["id"]
+            conn.execute(
+                """INSERT OR REPLACE INTO channel_reads (channel_id, user_id, last_read_id)
+                   VALUES (?,?,?)""",
+                (cid, user["id"], max_id))
+        return msgs
 
 
 @app.post("/api/channels/{cid}/messages")
@@ -910,6 +979,19 @@ async def post_message(cid: int, request: Request, user=Depends(current_user)):
     }
     _fanout(cid, payload)
     return {"ok": True, "id": mid}
+
+
+@app.post("/api/channels/{cid}/read")
+def mark_channel_read(cid: int, user=Depends(current_user)):
+    with db.get_db() as conn:
+        max_id = conn.execute(
+            "SELECT COALESCE(MAX(id),0) m FROM messages WHERE channel_id=? AND deleted=0", (cid,)
+        ).fetchone()["m"]
+        conn.execute(
+            """INSERT OR REPLACE INTO channel_reads (channel_id, user_id, last_read_id)
+               VALUES (?,?,?)""",
+            (cid, user["id"], max_id))
+        return {"ok": True}
 
 
 @app.delete("/api/channels/{cid}/messages/{mid}")

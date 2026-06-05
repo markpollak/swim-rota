@@ -240,6 +240,9 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .ch-row:active { opacity:.7; }
 .ch-avatar { width:44px; height:44px; border-radius:50%; display:grid; place-items:center; font-size:1.2rem; font-weight:800; color:#fff; flex-shrink:0; }
 .ch-avatar.sm { width:30px; height:30px; font-size:.85rem; }
+.ch-avatar-dm { background:var(--magenta) !important; font-size:1.1rem; }
+.ch-unread { background:var(--magenta); color:#fff; border-radius:99px; font-size:.68rem; font-weight:800; min-width:20px; height:20px; padding:0 5px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.ch-section { font-size:.72rem; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; padding:12px 2px 6px; }
 .ch-info { flex:1; min-width:0; }
 .ch-preview { font-size:.82rem; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
 
@@ -300,16 +303,17 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .wg-legend { font-size: .72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
 
 /* ---------- rota builder grid ---------- */
-.rg-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: 10px; }
-.rg-table { border-collapse: collapse; font-size: .75rem; min-width: 100%; }
-.rg-th { background: var(--blue-soft); text-align: center; padding: 5px 4px; font-weight: 700; color: var(--blue); border: 1px solid var(--line); min-width: 68px; }
+.rg-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: 10px; max-width: 100%; }
+.rg-table { border-collapse: collapse; font-size: .72rem; }
+.rg-th { background: var(--blue-soft); text-align: center; padding: 5px 3px; font-weight: 700; color: var(--blue); border: 1px solid var(--line); min-width: 54px; }
 .rg-th.rg-today { background: var(--blue); color: #fff; }
 .rg-dnum { font-size:.9rem; font-weight:800; }
 .rg-time { position: sticky; left: 0; background: #fff; z-index: 2; font-size: .68rem; font-weight: 700; color: var(--muted); padding: 2px 5px; border: 1px solid var(--line); white-space: nowrap; width: 50px; }
-.rg-cell { border: 1px solid var(--line); padding: 2px; }
+.rg-cell { border: 1px solid var(--line); padding: 2px; max-width: 70px; }
 .rg-empty { background: #fafafa; }
+#manageBody { max-width: 100%; overflow-x: hidden; }
 .rg-legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; align-items:center; font-size:.75rem; }
-.rb-cell { border-radius: 7px; padding: 4px 6px; text-align: center; font-size: .72rem; font-weight: 700; cursor: pointer; transition: background .1s; user-select: none; }
+.rb-cell { border-radius: 7px; padding: 3px 4px; text-align: center; font-size: .68rem; font-weight: 700; cursor: pointer; transition: background .1s; user-select: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 66px; }
 .rg-open { background: #f0f4ff; color: var(--blue); border: 1.5px dashed var(--blue); }
 .rg-open:hover, .rg-open.rb-sel { background: var(--blue); color: #fff; border-style: solid; }
 .rb-sel { background: var(--blue) !important; color: #fff !important; border-color: var(--blue) !important; }
