@@ -1618,11 +1618,11 @@ function renderChannelList() {
   if (!chs.length) {
     body = `<div class="empty"><div class="big">💬</div>You're not in any channels yet.<br/><span class="small muted">Ask an admin to add you.</span></div>`;
   } else {
-    if (dms.length) {
-      body += `${hasBoth ? `<div class="ch-section">Direct Messages</div>` : ""}${dms.map(chRow).join("")}`;
-    }
     if (channels.length) {
       body += `${hasBoth ? `<div class="ch-section">Channels</div>` : ""}${channels.map(chRow).join("")}`;
+    }
+    if (dms.length) {
+      body += `${hasBoth ? `<div class="ch-section">Direct Messages</div>` : ""}${dms.map(chRow).join("")}`;
     }
   }
 
