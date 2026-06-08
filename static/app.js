@@ -656,14 +656,7 @@ function renderWeekGrid(allSlots) {
         (a, b) => (b.isDuty ? 1 : 0) - (a.isDuty ? 1 : 0)
       );
       const MAX_PILLS = 4;
-      let shownGroups = groupVals;
-      let moreCount = 0;
-      if (groupVals.length > MAX_PILLS) {
-        shownGroups = groupVals.slice(0, MAX_PILLS - 1);
-        moreCount = groupVals.length - shownGroups.length;
-      }
-
-      const pills = shownGroups.map((g) => {
+      const renderGroupPill = (g) => {
         if (g.isDuty) {
           const approved = g.slots.filter((s) => s.status === "approved").length;
           const total = g.slots.length;
@@ -679,7 +672,19 @@ function renderWeekGrid(allSlots) {
         const shortName = (g.level_name || "").replace("Parents & Toddlers", "P&T").replace("Level ", "L");
         const who = assignedSlot ? ` · ${assignedSlot.assigned_name?.split(" ")[0]}` : pendingSlot ? " · ⏳" : "";
         return `<div class="wg-pill ${cls}${mine ? " wg-mine" : ""}">${esc(shortName)}${esc(who)}</div>`;
-      }).join("") + (moreCount ? `<div class="wg-pill wg-pill-more">+${moreCount} more</div>` : "");
+      };
+
+      let shownGroups = groupVals;
+      let hiddenGroups = [];
+      if (groupVals.length > MAX_PILLS) {
+        shownGroups = groupVals.slice(0, MAX_PILLS - 1);
+        hiddenGroups = groupVals.slice(MAX_PILLS - 1);
+      }
+      const moreCount = hiddenGroups.length;
+
+      const pills = shownGroups.map(renderGroupPill).join("") +
+        (moreCount ? `<button class="wg-pill wg-pill-more" data-wg-expand>+${moreCount} more</button>` +
+          `<div class="wg-extra-pills" style="display:none">${hiddenGroups.map(renderGroupPill).join("")}</div>` : "");
 
       return `<td class="wg-cell" data-date="${day.iso}" data-time="${time}">${pills}</td>`;
     }).join("");
@@ -702,6 +707,14 @@ function renderWeekGrid(allSlots) {
       </table>
     </div>
     <p class="small muted" style="margin-top:8px">Tap a day in the weekbar to switch to the day view for that date.</p>`;
+
+  // expand "+N more" pills without navigating to day view
+  body.querySelectorAll("[data-wg-expand]").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      btn.nextElementSibling.style.display = "";
+      btn.remove();
+    }));
 
   // clicking a cell switches to day view for that date
   body.querySelectorAll("[data-date]").forEach((td) =>
