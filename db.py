@@ -212,6 +212,10 @@ def init_db():
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('timezone', 'Europe/London')",
             "ALTER TABLE channels ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0",
             "UPDATE channels SET is_system=1 WHERE name='All Staff'",
+            "ALTER TABLE channels ADD COLUMN deleted_at TEXT",
+            "ALTER TABLE channels ADD COLUMN deleted_by INTEGER",
+            "ALTER TABLE users ADD COLUMN deleted_at TEXT",
+            "ALTER TABLE users ADD COLUMN deleted_by INTEGER",
         ]:
             try:
                 conn.execute(stmt)

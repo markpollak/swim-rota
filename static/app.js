@@ -1751,16 +1751,24 @@ function updateRotaCount() {
 async function manageUsers() {
   const mb = $("#manageBody");
   const users = await api("/api/users");
+  const active = users.filter((u) => u.active !== false);
+  const inactive = users.filter((u) => u.active === false);
+  const userCard = (u) => `
+    <div class="card" data-user="${u.id}" style="cursor:pointer${u.active === false ? ";opacity:.5" : ""}">
+      <div class="between">
+        <div><strong>${esc(u.full_name)}</strong> ${u.is_admin ? `<span class="tag" style="background:var(--magenta)">Admin</span>` : ""}
+          <div class="small muted">@${esc(u.username)} · ${u.roles.map((r) => esc(r.name)).join(", ") || "no roles"}</div>
+          ${u.active === false && u.deleted_at ? `<div class="small muted">Deactivated ${fmtTs(u.deleted_at)}${u.deleted_by_name ? " by " + esc(u.deleted_by_name) : ""}</div>` : ""}
+        </div>
+        ${u.training_status !== "n/a" ? `<span class="pill ${u.training_status}">${u.training_status}</span>` : ""}
+      </div>
+    </div>`;
   mb.innerHTML = `
     <button class="btn block sub" id="addUser" style="margin-bottom:12px">＋ Add person</button>
-    ${users.map((u) => `
-      <div class="card" data-user="${u.id}" style="cursor:pointer">
-        <div class="between">
-          <div><strong>${esc(u.full_name)}</strong> ${u.is_admin ? `<span class="tag" style="background:var(--magenta)">Admin</span>` : ""}
-            <div class="small muted">@${esc(u.username)} · ${u.roles.map((r) => esc(r.name)).join(", ") || "no roles"}</div></div>
-          ${u.training_status !== "n/a" ? `<span class="pill ${u.training_status}">${u.training_status}</span>` : ""}
-        </div>
-      </div>`).join("")}`;
+    ${active.map(userCard).join("")}
+    ${inactive.length ? `
+    <div class="section-title small muted" style="margin:20px 0 8px;font-size:.8rem;letter-spacing:.04em;text-transform:uppercase">Deactivated staff</div>
+    ${inactive.map(userCard).join("")}` : ""}`;
   $("#addUser").addEventListener("click", () => userSheet(null));
   mb.querySelectorAll("[data-user]").forEach((c) =>
     c.addEventListener("click", () => userSheet(users.find((u) => u.id == c.dataset.user))));
@@ -2359,8 +2367,9 @@ async function sendMessage(channelId, input, btn) {
 
 // ---- admin channel management ----
 async function adminChannels() {
-  const chs = await api("/api/channels");
-  const allUsers = await api("/api/users");
+  const [chs, allUsers, deleted] = await Promise.all([
+    api("/api/channels"), api("/api/users"), api("/api/channels/deleted"),
+  ]);
   screen().innerHTML = `
     <div class="between" style="margin-bottom:14px">
       <h1 class="section-title" style="margin:0">Channels</h1>
@@ -2378,11 +2387,44 @@ async function adminChannels() {
           <button class="btn sub sm" data-edit-ch="${ch.id}">Edit</button>
         </div>
       </div>`;
-    }).join("")}`;
+    }).join("")}
+    ${deleted.length ? `
+    <div class="section-title small muted" style="margin:20px 0 8px;font-size:.8rem;letter-spacing:.04em;text-transform:uppercase">Deleted channels</div>
+    ${deleted.map((ch) => `
+      <div class="card" style="margin-bottom:8px;border-left:4px solid ${ch.color};opacity:.5;cursor:pointer" data-del-ch="${ch.id}">
+        <div class="between">
+          <div><strong>${esc(ch.name)}</strong>
+            <div class="small muted">
+              Deleted ${ch.deleted_at ? fmtTs(ch.deleted_at) : "unknown date"}${ch.deleted_by_name ? " by " + esc(ch.deleted_by_name) : ""}
+              · ${ch.member_count} members
+            </div>
+          </div>
+          <span class="small muted">View ›</span>
+        </div>
+      </div>`).join("")}` : ""}`;
   $("#backToMsgs").addEventListener("click", () => renderChannelList());
   $("#newChBtn2").addEventListener("click", () => channelSheet(null, allUsers));
   screen().querySelectorAll("[data-edit-ch]").forEach((b) =>
     b.addEventListener("click", () => channelSheet(chs.find((c) => c.id === Number(b.dataset.editCh)), allUsers)));
+  screen().querySelectorAll("[data-del-ch]").forEach((b) =>
+    b.addEventListener("click", () => viewDeletedChannel(deleted.find((c) => c.id === Number(b.dataset.delCh)))));
+}
+
+async function viewDeletedChannel(ch) {
+  let msgs = [];
+  try { msgs = await api(`/api/channels/${ch.id}/messages`); } catch {}
+  openSheet(`
+    <h2 style="margin-bottom:2px">${esc(ch.name)} <span class="muted" style="font-weight:400;font-size:.8em">(deleted)</span></h2>
+    <p class="small muted" style="margin-bottom:14px">Deleted ${ch.deleted_at ? fmtTs(ch.deleted_at) : ""}${ch.deleted_by_name ? " by " + esc(ch.deleted_by_name) : ""}</p>
+    <div style="max-height:60vh;overflow-y:auto">
+      ${msgs.length ? msgs.map((m) => `
+        <div style="margin-bottom:12px">
+          <div class="small" style="font-weight:700">${esc(m.full_name)} <span class="muted" style="font-weight:400">${fmtTs(m.sent_at)}</span></div>
+          <div style="white-space:pre-wrap;word-break:break-word">${esc(m.body)}</div>
+        </div>`).join("") : `<div class="empty">No messages in this channel.</div>`}
+    </div>
+    <button class="btn ghost block" id="dch-close" style="margin-top:16px">Close</button>`);
+  document.getElementById("dch-close").addEventListener("click", closeSheet);
 }
 
 async function channelSheet(ch, allUsers) {

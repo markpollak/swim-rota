@@ -120,11 +120,15 @@ def user_payload(conn, u):
             training_status = "expiring"
         else:
             training_status = "valid"
+    deleted_by_name = None
+    if u.get("deleted_by"):
+        db_row = conn.execute("SELECT full_name FROM users WHERE id=?", (u["deleted_by"],)).fetchone()
+        deleted_by_name = db_row["full_name"] if db_row else None
     return {
         "id": u["id"], "username": u["username"], "full_name": u["full_name"],
         "email": u["email"], "phone": u["phone"], "is_admin": bool(u["is_admin"]),
         "training_expiry": expiry, "training_status": training_status,
-        "roles": roles,
+        "roles": roles, "deleted_at": u.get("deleted_at"), "deleted_by_name": deleted_by_name,
     }
 
 
@@ -591,6 +595,10 @@ async def update_user(user_id: int, request: Request, admin=Depends(require_admi
             fields.append("is_admin=?"); params.append(1 if b["is_admin"] else 0)
         if "active" in b:
             fields.append("active=?"); params.append(1 if b["active"] else 0)
+            if not b["active"]:
+                fields += ["deleted_at=?", "deleted_by=?"]; params += [now_iso(), admin["id"]]
+            else:
+                fields += ["deleted_at=?", "deleted_by=?"]; params += [None, None]
         if fields:
             params.append(user_id)
             conn.execute(f"UPDATE users SET {','.join(fields)} WHERE id=?", params)
@@ -1077,6 +1085,23 @@ def _channel_payload(conn, ch, requesting_uid=None):
     }
 
 
+@app.get("/api/channels/deleted")
+def list_deleted_channels(admin=Depends(require_admin)):
+    with db.get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM channels WHERE active=0 AND type != 'dm' ORDER BY deleted_at DESC NULLS LAST"
+        ).fetchall()
+        result = []
+        for r in rows:
+            payload = _channel_payload(conn, r)
+            payload["deleted_at"] = r["deleted_at"] if "deleted_at" in r.keys() else None
+            del_by = r["deleted_by"] if "deleted_by" in r.keys() else None
+            del_user = conn.execute("SELECT full_name FROM users WHERE id=?", (del_by,)).fetchone() if del_by else None
+            payload["deleted_by_name"] = del_user["full_name"] if del_user else None
+            result.append(payload)
+        return result
+
+
 @app.get("/api/channels")
 def list_channels(user=Depends(current_user)):
     with db.get_db() as conn:
@@ -1180,7 +1205,8 @@ def delete_channel(cid: int, admin=Depends(require_admin)):
         ch = conn.execute("SELECT name, is_system FROM channels WHERE id=?", (cid,)).fetchone()
         if ch and ch["is_system"]:
             raise HTTPException(400, "System channels cannot be deleted.")
-        conn.execute("UPDATE channels SET active=0 WHERE id=?", (cid,))
+        conn.execute("UPDATE channels SET active=0, deleted_at=?, deleted_by=? WHERE id=?",
+                     (now_iso(), admin["id"], cid))
         _audit(conn, admin["id"], "channels", "channel_delete", ch["name"] if ch else str(cid))
         return {"ok": True}
 
