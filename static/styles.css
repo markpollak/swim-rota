@@ -365,6 +365,7 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .rg-taken-ok { background: var(--green-soft); color: var(--green); border: 1.5px solid var(--green); cursor: default; }
 .rg-taken-pending { background: var(--amber-soft); color: var(--amber); border: 1.5px solid var(--amber); cursor: default; }
 .rg-past { background: #f5f5f5; color: #bbb; border: 1.5px dashed #ddd; cursor: not-allowed; }
+.rg-lvl { font-weight:900; font-size:.72rem; opacity:.85; }
 
 /* hint bar for open shifts */
 .open-hint {

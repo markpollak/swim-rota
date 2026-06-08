@@ -1295,9 +1295,11 @@ function buildRotaGrid(roleSlots, times, weekStart) {
         const taken = s.status !== "open";
         const name = s.assigned_name ? s.assigned_name.split(" ")[0] : null;
         const cls = taken ? (s.status === "approved" ? "rg-taken-ok" : "rg-taken-pending") : isPast ? "rg-past" : "rg-open";
-        return `<div class="rb-cell ${cls}" data-sid="${s.id}"${taken ? ` data-taken="1" title="${name || s.status}"` : ""} style="margin-bottom:2px">
-          ${taken ? esc(name || s.status) : "Open"}
-        </div>`;
+        const lvl = s.level_id
+          ? (s.level_name || "").replace("Parents & Toddlers", "P&T").replace("Level ", "L")
+          : "🛟";
+        const label = taken ? `${esc(name || s.status)} <span class="rg-lvl">${esc(lvl)}</span>` : `<span class="rg-lvl">${esc(lvl)}</span>`;
+        return `<div class="rb-cell ${cls}" data-sid="${s.id}"${taken ? ` data-taken="1"` : ""} title="${taken ? (name || s.status) + " · " : ""}${s.level_name || "Pool duty"}" style="margin-bottom:2px">${label}</div>`;
       }).join("")}</td>`;
     }).join("");
     return `<tr><td class="rg-time">${time}</td>${cells}</tr>`;
