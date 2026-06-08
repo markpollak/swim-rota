@@ -62,7 +62,9 @@ def seeded(conn):
 
 def wipe(conn):
     for t in ["audit", "notifications", "slots", "templates", "level_staffing",
-              "user_roles", "users", "levels", "roles"]:
+              "user_roles", "users", "levels", "roles",
+              "messages", "channel_members", "channels",
+              "channel_reads", "class_schedules", "schedule_staff"]:
         conn.execute(f"DELETE FROM {t}")
         conn.execute("DELETE FROM sqlite_sequence WHERE name = ?", (t,))
 
