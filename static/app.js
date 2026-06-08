@@ -15,7 +15,7 @@ const State = {
   weekStart: null,
   selectedDate: null,
   calendarFilter: null,  // null = my-roles default; role_id = that role; 'all' = everything
-  calendarView: "day",   // "day" | "week"
+  calendarView: "week",  // "day" | "week"
   // my shifts
   myTab: "upcoming",
   // admin
@@ -535,8 +535,8 @@ async function viewCalendar() {
       <button id="nextWk">Next ›</button>
     </div>
     <div class="tabs" style="margin-bottom:0;background:var(--blue-soft);padding:4px;border-radius:12px">
-      <button id="viewDay" class="${isDayView ? "active" : ""}">Day</button>
       <button id="viewWeek" class="${!isDayView ? "active" : ""}">Week</button>
+      <button id="viewDay" class="${isDayView ? "active" : ""}">Day</button>
     </div>
     ${isDayView ? `<div class="weekbar" id="weekbar"></div>${renderFilterBar()}` : ""}
     <div id="dayBody"><div class="spinner"></div></div>`;

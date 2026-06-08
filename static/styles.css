@@ -170,7 +170,7 @@ label { display: block; font-size: .82rem; font-weight: 600; color: var(--muted)
 .slotrow .act { display:flex; gap:6px; align-items:center; }
 
 /* ---------- calendar week strip ---------- */
-.weekbar { display:flex; gap:6px; overflow-x:auto; padding: 2px 0 8px; -webkit-overflow-scrolling: touch; }
+.weekbar { display:flex; gap:6px; overflow-x:auto; padding: 10px 0 8px; -webkit-overflow-scrolling: touch; }
 .weekbar button {
   flex: 0 0 auto; border: 1.5px solid var(--line); background:#fff; border-radius: 12px; padding: 8px 6px;
   min-width: 48px; display:flex; flex-direction:column; align-items:center; gap:2px; color: var(--ink);
@@ -326,14 +326,14 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .wg-empty { background: #fafafa; }
 .wg-pill { border-radius: 6px; padding: 3px 5px; margin-bottom: 2px; font-size: .67rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wg-pill-ok { background: var(--green-soft); color: var(--green); }
-.wg-pill-partial { background: var(--green-soft); color: var(--green); }
+.wg-pill-partial { background: var(--amber-soft); color: var(--amber); }
 .wg-pill-pending { background: var(--amber-soft); color: var(--amber); }
 .wg-pill-open { background: var(--blue-soft); color: var(--blue); }
 .wg-pill-more { background: transparent; color: var(--blue); font-weight: 700; padding: 1px 5px; border: none; cursor: pointer; font-size: inherit; }
 .wg-extra-pills { display: contents; }
 .wg-mine { outline: 2px solid var(--magenta); outline-offset: 1px; border-radius: 6px; }
-.wg-hint { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
-.wg-legend { font-size: .72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
+.wg-hint { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; padding:0 2px; }
+.wg-legend { font-size: .72rem; font-weight: 700; padding: 3px 10px; border-radius: 6px; }
 
 /* ---------- home shifts week grid ---------- */
 .ms-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 10px; border: 1px solid var(--line); }
