@@ -265,19 +265,57 @@ def request_slot(slot_id: int, user=Depends(current_user)):
 
 
 @app.post("/api/slots/{slot_id}/release")
-def release_slot(slot_id: int, user=Depends(current_user)):
+async def release_slot(slot_id: int, request: Request, user=Depends(current_user)):
+    body = await request.json() if await _has_body(request) else {}
+    reason = (body.get("reason") or "").strip()
+    dm_cid = dm_mid = dm_msg = None
     with db.get_db() as conn:
-        s = _get_slot(conn, slot_id)
+        s = conn.execute(
+            """SELECT s.*, l.name level_name, r.name role_name
+               FROM slots s LEFT JOIN levels l ON l.id=s.level_id
+               JOIN roles r ON r.id=s.role_id WHERE s.id=?""", (slot_id,)).fetchone()
+        if not s:
+            raise HTTPException(404, "Shift not found")
+        s = dict(s)
         if s["assigned_user_id"] != user["id"] and not user["is_admin"]:
             raise HTTPException(403, "That isn't your shift.")
         if s["date"] < date.today().isoformat():
             raise HTTPException(409, "You cannot release a past shift.")
+        uid = s["assigned_user_id"]
         conn.execute("""UPDATE slots SET assigned_user_id=NULL, status='open',
                         requested_at=NULL, decided_at=NULL, decided_by=NULL WHERE id=?""", (slot_id,))
-        notify_admins(conn, f"{user['full_name']} released {s['label'] or 'a shift'} on {s['date']} {s['start_time']} — now open.", "reports")
         conn.execute("INSERT INTO audit (ts, user_id, action, detail) VALUES (?,?,?,?)",
                      (now_iso(), user["id"], "release", f"slot {slot_id}"))
-        return {"ok": True}
+        # If an admin removed someone else's shift, DM the worker
+        if user["is_admin"] and uid and uid != user["id"]:
+            lvl = s["level_name"] or "Pool duty (Lifeguard)"
+            # Format date as "Monday 8 June"
+            from datetime import datetime as _dt
+            d_obj = _dt.strptime(s["date"], "%Y-%m-%d")
+            date_str = d_obj.strftime("%A %-d %B")
+            reason_str = reason if reason else "none given"
+            dm_msg = (f"Your shift was removed: {date_str} {s['start_time']}–{s['end_time']} "
+                      f"// {s['role_name']} // {lvl} // Reason: {reason_str}")
+            notify_user(conn, uid, "Your shift was removed — see your messages for details.")
+            dm_ch = conn.execute(
+                "SELECT id FROM channels WHERE dm_user_id=? AND type='dm' AND active=1", (uid,)
+            ).fetchone()
+            if dm_ch:
+                ts = now_iso()
+                cur = conn.execute(
+                    "INSERT INTO messages (channel_id, user_id, body, sent_at) VALUES (?,?,?,?)",
+                    (dm_ch["id"], user["id"], dm_msg, ts))
+                dm_cid = dm_ch["id"]
+                dm_mid = cur.lastrowid
+        else:
+            notify_admins(conn, f"{user['full_name']} released a shift on {s['date']} {s['start_time']} — now open.", "reports")
+    if dm_cid and dm_mid:
+        _fanout(dm_cid, {
+            "id": dm_mid, "channel_id": dm_cid, "body": dm_msg,
+            "sent_at": now_iso(), "user_id": user["id"],
+            "full_name": user["full_name"], "username": user["username"],
+        })
+    return {"ok": True}
 
 
 @app.post("/api/slots/{slot_id}/approve")

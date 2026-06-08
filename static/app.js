@@ -2090,27 +2090,33 @@ async function channelSheet(ch, allUsers) {
 
 function showSlotRemoveSheet(slot) {
   const lvl = slot.level_name || "Pool duty (Lifeguard)";
-  const name = slot.assigned_name || "Unknown";
+  const firstName = (slot.assigned_name || "them").split(" ")[0];
   const dateStr = fmtDate(slot.date);
   openSheet(`
     <h2 style="margin-bottom:16px">Remove shift?</h2>
     <div class="detail-rows">
-      <div class="detail-row"><span>Person</span><strong>${esc(name)}</strong></div>
+      <div class="detail-row"><span>Person</span><strong>${esc(slot.assigned_name || "")}</strong></div>
       <div class="detail-row"><span>Date</span><strong>${esc(dateStr)}</strong></div>
       <div class="detail-row"><span>Time</span><strong>${slot.start_time}–${slot.end_time}</strong></div>
       <div class="detail-row"><span>Role</span><strong>${esc(slot.role_name || "")}</strong></div>
       <div class="detail-row"><span>Class</span><strong>${esc(lvl)}</strong></div>
     </div>
-    <div style="margin-top:20px;display:flex;gap:10px">
+    <div class="field" style="margin-top:16px">
+      <label>Reason <span class="muted" style="font-weight:400;font-size:.78rem">(optional — leave blank if no reason)</span></label>
+      <textarea id="sr-reason" rows="2" placeholder="e.g. Schedule change" style="resize:none"></textarea>
+      <p class="small muted" style="margin-top:4px">This reason will be sent as a direct message to ${esc(firstName)} automatically.</p>
+    </div>
+    <div style="margin-top:16px;display:flex;gap:10px">
       <button class="btn danger" id="sr-confirm">Yes, remove</button>
       <button class="btn ghost" id="sr-cancel">Cancel</button>
     </div>`);
   document.getElementById("sr-confirm").addEventListener("click", async (e) => {
     e.target.disabled = true; e.target.textContent = "Removing…";
+    const reason = document.getElementById("sr-reason")?.value.trim() || "";
     try {
-      await api(`/api/slots/${slot.id}/release`, { method: "POST" });
+      await api(`/api/slots/${slot.id}/release`, { method: "POST", body: { reason } });
       closeSheet();
-      toast(`${name.split(" ")[0]}'s shift removed`, "ok");
+      toast(`${firstName}'s shift removed`, "ok");
       rotaBuilder();
     } catch (err) { toast(err.message, "err"); e.target.disabled = false; e.target.textContent = "Yes, remove"; }
   });
