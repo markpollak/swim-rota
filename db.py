@@ -200,6 +200,7 @@ def init_db():
         for stmt in [
             "ALTER TABLE channels ADD COLUMN type TEXT NOT NULL DEFAULT 'channel'",
             "ALTER TABLE channels ADD COLUMN dm_user_id INTEGER",
+            "ALTER TABLE roles ADD COLUMN shortcode TEXT",
         ]:
             try:
                 conn.execute(stmt)

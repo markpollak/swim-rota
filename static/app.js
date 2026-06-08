@@ -1166,9 +1166,10 @@ async function rotaBuilder() {
   ]);
   State._rotaWeekStart = State._rotaWeekStart || mondayOf(parseISO(isoToday()));
 
-  // Which role tab is active?
-  if (!State.rotaRole) State.rotaRole = State.roles.find((r) => r.name === "Lifeguard")?.id || State.roles[0]?.id;
-  const roleObj = State.roles.find((r) => r.id === State.rotaRole);
+  // Which role tab is active? null = "All roles"
+  if (State.rotaRole === undefined) State.rotaRole = State.roles.find((r) => r.name === "Lifeguard")?.id || State.roles[0]?.id;
+  const roleObj = State.rotaRole ? State.roles.find((r) => r.id === State.rotaRole) : null;
+  const isAllView = !State.rotaRole;
 
   const weekISO = toISO(State._rotaWeekStart);
   const weekEnd = toISO(addDays(State._rotaWeekStart, 6));
@@ -1177,27 +1178,34 @@ async function rotaBuilder() {
   try { weekSlots = await api(`/api/slots/week?date=${weekISO}`); }
   catch { weekSlots = []; }
 
-  // Filter to active role
-  const roleSlots = weekSlots.filter((s) => s.role_id === State.rotaRole);
+  // Filter to active role (or all)
+  const roleSlots = isAllView ? weekSlots : weekSlots.filter((s) => s.role_id === State.rotaRole);
 
-  // Qualified staff for this role
-  const qualified = users.filter((u) =>
+  // Qualified staff for this role (hidden in All view)
+  const qualified = isAllView ? [] : users.filter((u) =>
     u.active !== false && u.roles.some((r) => r.id === State.rotaRole));
 
-  // Build time×day grid for this role
   const times = [...new Set(roleSlots.map((s) => s.start_time))].sort();
-  const DAYS_FULL = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 
-  const roleTabsHtml = State.roles.map((r) =>
-    `<button class="filterchip${r.id === State.rotaRole ? " active" : ""}" data-rtab="${r.id}"
-      style="${r.id === State.rotaRole ? `background:${r.color};border-color:${r.color}` : `border-color:${r.color};color:${r.color}`}">${esc(r.name)}</button>`
-  ).join("");
+  // Role tab badge: lifeguard → 🛟, others → shortcode or first letter
+  function roleTabBadge(r) {
+    if (r.requires_training) return `<span class="rtab-icon">🛟</span>`;
+    const code = r.shortcode || r.name[0].toUpperCase();
+    return `<span class="rtab-badge" style="background:${r.color}">${esc(code)}</span>`;
+  }
+
+  const roleTabsHtml = [
+    `<button class="filterchip${isAllView ? " active" : ""}" data-rtab="0">All</button>`,
+    ...State.roles.map((r) =>
+      `<button class="filterchip${r.id === State.rotaRole ? " active" : ""}" data-rtab="${r.id}"
+        style="${r.id === State.rotaRole ? `background:${r.color};border-color:${r.color}` : `border-color:${r.color};color:${r.color}`}">${roleTabBadge(r)} ${esc(r.name)}</button>`),
+  ].join("");
 
   mb.innerHTML = `
-    <p class="small muted">Pick a person, then tick the slots you want to assign them to. Assignments are approved immediately.</p>
+    <p class="small muted">${isAllView ? "Overview of all roles for the week." : "Pick a person, then tick the slots you want to assign them to. Assignments are approved immediately."}</p>
     <div class="filterbar" style="margin-bottom:10px">${roleTabsHtml}</div>
 
-    <div class="card" style="margin-bottom:12px">
+    ${isAllView ? "" : `<div class="card" style="margin-bottom:12px">
       <div class="between">
         <div class="field" style="margin:0;flex:1">
           <label>Assign to</label>
@@ -1212,21 +1220,27 @@ async function rotaBuilder() {
           <button class="btn sub sm" id="rb-next">›</button>
         </div>
       </div>
-    </div>
+    </div>`}
+
+    ${isAllView ? `<div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+      <button class="btn sub sm" id="rb-prev">‹</button>
+      <span class="small" style="white-space:nowrap">${fmtDate(weekISO).slice(4)}–${fmtDate(weekEnd).slice(4)}</span>
+      <button class="btn sub sm" id="rb-next">›</button>
+    </div>` : ""}
 
     <div id="rb-grid">
-      ${times.length === 0 ? `<div class="empty">No ${esc(roleObj?.name || "")} slots this week.</div>` : buildRotaGrid(roleSlots, times, State._rotaWeekStart)}
+      ${times.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(roleSlots, times, State._rotaWeekStart, isAllView, State.roles)}
     </div>
 
-    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+    ${isAllView ? "" : `<div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn green" id="rb-apply" disabled>Assign selected slots</button>
       <button class="btn ghost sm" id="rb-clearsel">Clear selection</button>
       <span class="small muted" id="rb-selcount" style="align-self:center"></span>
-    </div>`;
+    </div>`}`;
 
   // Role tab switching
   mb.querySelectorAll("[data-rtab]").forEach((b) => b.addEventListener("click", () => {
-    State.rotaRole = Number(b.dataset.rtab); rotaBuilder();
+    State.rotaRole = Number(b.dataset.rtab) || null; rotaBuilder();
   }));
 
   // Week nav
@@ -1283,7 +1297,7 @@ async function rotaBuilder() {
   });
 }
 
-function buildRotaGrid(roleSlots, times, weekStart) {
+function buildRotaGrid(roleSlots, times, weekStart, allView = false, allRoles = []) {
   const today = isoToday();
   const DAYS_SHORT = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
   const days = Array.from({length: 7}, (_, i) => {
@@ -1291,7 +1305,6 @@ function buildRotaGrid(roleSlots, times, weekStart) {
     return { iso: toISO(d), label: DAYS_SHORT[i], num: d.getDate() };
   });
 
-  // Only show days with content
   const activeDays = days.filter((day) => roleSlots.some((s) => s.date === day.iso));
   if (!activeDays.length) return `<div class="empty">No slots this week.</div>`;
 
@@ -1299,7 +1312,6 @@ function buildRotaGrid(roleSlots, times, weekStart) {
     `<th class="rg-th${d.iso === today ? " rg-today" : ""}">${d.label}<br/><span class="rg-dnum">${d.num}</span></th>`
   ).join("")}</tr>`;
 
-  // Group slots: time × date → [slot, ...]
   const slotMap = {};
   for (const s of roleSlots) {
     const k = `${s.start_time}|${s.date}`;
@@ -1307,12 +1319,15 @@ function buildRotaGrid(roleSlots, times, weekStart) {
     slotMap[k].push(s);
   }
 
+  // In all-view, sort each cell's slots by role sort_order then level
+  const roleOrder = Object.fromEntries(allRoles.map((r, i) => [r.id, i]));
+
   const bodyRows = times.map((time) => {
     const cells = activeDays.map((day) => {
       const key = `${time}|${day.iso}`;
-      const ss = slotMap[key] || [];
+      let ss = slotMap[key] || [];
       if (!ss.length) return `<td class="rg-cell rg-empty"></td>`;
-      // All slots for this day/time go into ONE <td> to keep column count stable
+      if (allView) ss = [...ss].sort((a, b) => (roleOrder[a.role_id] ?? 99) - (roleOrder[b.role_id] ?? 99));
       return `<td class="rg-cell">${ss.map((s) => {
         const isPast = day.iso < today;
         const taken = s.status !== "open";
@@ -1321,20 +1336,29 @@ function buildRotaGrid(roleSlots, times, weekStart) {
         const lvl = s.level_id
           ? (s.level_name || "").replace("Parents & Toddlers", "P&T").replace("Level ", "L")
           : "🛟";
-        const label = taken ? `${esc(name || s.status)} <span class="rg-lvl">${esc(lvl)}</span>` : `<span class="rg-lvl">${esc(lvl)}</span>`;
-        return `<div class="rb-cell ${cls}" data-sid="${s.id}"${taken ? ` data-taken="1"` : ""} title="${taken ? (name || s.status) + " · " : ""}${s.level_name || "Pool duty"}" style="margin-bottom:2px">${label}</div>`;
+        // In all-view, prefix each cell with a coloured role badge
+        const role = allView ? allRoles.find((r) => r.id === s.role_id) : null;
+        const roleBadge = role
+          ? `<span class="rg-role-badge" style="background:${role.color}">${esc(role.requires_training ? "🛟" : (role.shortcode || role.name[0]))}</span>`
+          : "";
+        const label = taken
+          ? `${roleBadge}${esc(name || s.status)} <span class="rg-lvl">${esc(lvl)}</span>`
+          : `${roleBadge}<span class="rg-lvl">${esc(lvl)}</span>`;
+        return `<div class="rb-cell ${cls}${allView ? "" : ""}" data-sid="${s.id}"${taken ? ` data-taken="1"` : ""} title="${taken ? (name || s.status) + " · " : ""}${role ? role.name + " · " : ""}${s.level_name || "Pool duty"}" style="margin-bottom:2px">${label}</div>`;
       }).join("")}</td>`;
     }).join("");
     return `<tr><td class="rg-time">${time}</td>${cells}</tr>`;
   }).join("");
 
+  const legend = allView
+    ? allRoles.map((r) => `<span class="rg-legend-role"><span class="rg-role-badge" style="background:${r.color}">${esc(r.requires_training ? "🛟" : (r.shortcode || r.name[0]))}</span> ${esc(r.name)}</span>`).join("")
+    : `<span class="rb-cell rg-taken-ok" style="display:inline-block;padding:2px 8px">Approved</span>
+       <span class="rb-cell rg-taken-pending" style="display:inline-block;padding:2px 8px">Pending</span>
+       <span class="rb-cell rg-open" style="display:inline-block;padding:2px 8px">Open</span>
+       <span class="rb-cell rg-sel" style="display:inline-block;padding:2px 8px">Selected</span>`;
+
   return `<div class="rg-scroll"><table class="rg-table"><thead>${header}</thead><tbody>${bodyRows}</tbody></table></div>
-    <div class="rg-legend">
-      <span class="rb-cell rg-taken-ok" style="display:inline-block;padding:2px 8px">Approved</span>
-      <span class="rb-cell rg-taken-pending" style="display:inline-block;padding:2px 8px">Pending</span>
-      <span class="rb-cell rg-open" style="display:inline-block;padding:2px 8px">Open</span>
-      <span class="rb-cell rg-sel" style="display:inline-block;padding:2px 8px">Selected</span>
-    </div>`;
+    <div class="rg-legend">${legend}</div>`;
 }
 
 function refreshRotaGrid(roleSlots, times, weekStart) {
@@ -2101,13 +2125,15 @@ function roleSheet(r) {
     <h2>${isNew ? "Add role" : "Edit role"}</h2>
     <div class="stack" style="margin-top:14px">
       <div class="field"><label>Role name</label><input id="r-name" value="${esc(r?.name || "")}" placeholder="e.g. Assistant Teacher"/></div>
+      <div class="field"><label>Short code <span class="muted" style="font-weight:400;font-size:.78rem">(1–2 letters shown on rota tabs, e.g. T or AT)</span></label><input id="r-code" value="${esc(r?.shortcode || "")}" maxlength="2" placeholder="e.g. T" style="max-width:80px;text-transform:uppercase"/></div>
       <div class="field"><label>Colour</label><input id="r-color" type="color" value="${r?.color || "#0E9F8E"}" style="height:48px;padding:4px"/></div>
       <label class="checkrow ${r?.requires_training ? "on" : ""}"><input type="checkbox" id="r-train" ${r?.requires_training ? "checked" : ""}/> Requires in-date training (like lifeguards)</label>
       <button class="btn block" id="r-save">Save</button>
     </div>`);
+  $("#r-code").addEventListener("input", (e) => { e.target.value = e.target.value.toUpperCase(); });
   $("#r-train").addEventListener("change", (e) => e.target.closest(".checkrow").classList.toggle("on", e.target.checked));
   $("#r-save").addEventListener("click", async () => {
-    const body = { name: $("#r-name").value, color: $("#r-color").value, requires_training: $("#r-train").checked };
+    const body = { name: $("#r-name").value, color: $("#r-color").value, requires_training: $("#r-train").checked, shortcode: $("#r-code").value.toUpperCase() || null };
     if (!body.name) return toast("Name required", "err");
     try {
       if (isNew) await api("/api/roles", { method: "POST", body });

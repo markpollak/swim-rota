@@ -14,10 +14,10 @@ from scheduling import half_hour_blocks, monday_of, generate_slots
 random.seed(7)
 
 ROLES = [
-    # name, requires_training, color
-    ("Teacher", 0, "#26358B"),
-    ("Lifeguard", 1, "#A4358B"),
-    ("Assistant Teacher", 0, "#0E9F8E"),
+    # name, requires_training, color, shortcode
+    ("Teacher", 0, "#26358B", "T"),
+    ("Lifeguard", 1, "#A4358B", "LG"),
+    ("Assistant Teacher", 0, "#0E9F8E", "AT"),
 ]
 
 LEVELS = ["Parents & Toddlers"] + [f"Level {i}" for i in range(1, 11)]
@@ -83,10 +83,10 @@ def run(force=False):
 
         # roles
         role_id = {}
-        for i, (name, req, color) in enumerate(ROLES):
+        for i, (name, req, color, shortcode) in enumerate(ROLES):
             cur = conn.execute(
-                "INSERT INTO roles (name, requires_training, color, sort_order) VALUES (?,?,?,?)",
-                (name, req, color, i))
+                "INSERT INTO roles (name, requires_training, color, sort_order, shortcode) VALUES (?,?,?,?,?)",
+                (name, req, color, i, shortcode))
             role_id[name] = cur.lastrowid
 
         # levels

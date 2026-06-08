@@ -366,6 +366,11 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .rg-taken-pending { background: var(--amber-soft); color: var(--amber); border: 1.5px solid var(--amber); cursor: default; }
 .rg-past { background: #f5f5f5; color: #bbb; border: 1.5px dashed #ddd; cursor: not-allowed; }
 .rg-lvl { font-weight:900; font-size:.72rem; opacity:.85; }
+/* role shortcode badges — on rota tabs and inside all-view cells */
+.rtab-badge { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:4px; font-size:.6rem; font-weight:900; color:#fff; vertical-align:middle; flex-shrink:0; }
+.rtab-icon  { font-size:.85rem; vertical-align:middle; }
+.rg-role-badge { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:3px; font-size:.52rem; font-weight:900; color:#fff; vertical-align:middle; flex-shrink:0; margin-right:1px; line-height:1; }
+.rg-legend-role { display:inline-flex; align-items:center; gap:4px; font-size:.75rem; }
 .rb-skip-panel { background:var(--red-soft); border:1px solid #f0bcbc; border-radius:10px; padding:10px 14px; margin-bottom:12px; font-size:.8rem; color:var(--red); }
 .rb-skip-panel strong { display:block; margin-bottom:6px; }
 .rb-skip-list { margin:0; padding-left:16px; display:flex; flex-direction:column; gap:4px; }

@@ -574,8 +574,8 @@ async def add_role(request: Request, admin=Depends(require_admin)):
         mx = conn.execute("SELECT IFNULL(MAX(sort_order),0)+1 n FROM roles").fetchone()["n"]
         try:
             cur = conn.execute(
-                "INSERT INTO roles (name, requires_training, color, sort_order) VALUES (?,?,?,?)",
-                (b["name"], 1 if b.get("requires_training") else 0, b.get("color") or "#0E9F8E", mx))
+                "INSERT INTO roles (name, requires_training, color, sort_order, shortcode) VALUES (?,?,?,?,?)",
+                (b["name"], 1 if b.get("requires_training") else 0, b.get("color") or "#0E9F8E", mx, b.get("shortcode") or None))
         except Exception:
             raise HTTPException(409, "A role with that name already exists.")
         return {"ok": True, "id": cur.lastrowid}
@@ -586,9 +586,9 @@ async def update_role(role_id: int, request: Request, admin=Depends(require_admi
     b = await request.json()
     with db.get_db() as conn:
         fields, params = [], []
-        for col in ["name", "color"]:
+        for col in ["name", "color", "shortcode"]:
             if col in b:
-                fields.append(f"{col}=?"); params.append(b[col])
+                fields.append(f"{col}=?"); params.append(b[col] or None)
         if "requires_training" in b:
             fields.append("requires_training=?"); params.append(1 if b["requires_training"] else 0)
         if "active" in b:
