@@ -1,11 +1,11 @@
 /* Arc Swim Rota service worker.
  * App-shell cache so the PWA loads offline; API requests always hit the network
  * (never cached) so rota data is fresh. Bump CACHE to invalidate old shells. */
-const CACHE = "arc-swim-v22";
+const CACHE = "arc-swim-v23";
 const SHELL = [
   "/",
-  "/static/styles.css?v=22",
-  "/static/app.js?v=22",
+  "/static/styles.css?v=23",
+  "/static/app.js?v=23",
   "/manifest.webmanifest",
   "/static/icon-192.png",
   "/static/icon-512.png",

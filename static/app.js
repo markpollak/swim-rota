@@ -2293,13 +2293,16 @@ if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
 }
 
-// Re-fetch shift data silently when the user returns to the app (tab focus / back from background).
-// Only refreshes the views that show live slot data; ignores admin/messages/profile.
-document.addEventListener("visibilitychange", () => {
+// Re-fetch shift data when the user returns to the app, and every 3 minutes while it's open.
+// Only Home and My Shifts are refreshed; admin/messages/profile are left alone.
+// Skips when the page is hidden so no wasted requests while the phone is locked.
+function refreshShiftViews() {
   if (document.visibilityState !== "visible") return;
   if (!State.token || !State.user) return;
   if (State.view === "home") viewHome();
   else if (State.view === "myshifts") viewMyShifts();
-});
+}
+document.addEventListener("visibilitychange", refreshShiftViews);
+setInterval(refreshShiftViews, 3 * 60 * 1000);
 
 boot();
