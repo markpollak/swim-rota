@@ -419,48 +419,51 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .hsc-bot { display:flex; align-items:center; gap:8px; }
 
 /* ---------- my-shifts week grid (days = columns) ---------- */
+.ms-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:14px; }
 .ms-grid {
-  display:grid; grid-template-columns:repeat(7, minmax(0,1fr));
-  gap:4px; background:var(--blue-soft); border-radius:14px; padding:5px;
+  display:grid; grid-template-columns:repeat(7, minmax(58px,1fr));
+  gap:3px; background:var(--blue-soft); border-radius:14px; padding:4px;
+  min-width:420px;
 }
 .ms-col {
   display:flex; flex-direction:column; min-width:0;
   background:#fff; border-radius:9px; overflow:hidden;
 }
 .ms-col.ms-today { box-shadow:inset 0 0 0 2px var(--blue); }
-.ms-col.ms-past { opacity:.6; }
+.ms-col.ms-past  { opacity:.6; }
 .ms-head {
   text-align:center; padding:5px 0 4px; border-bottom:1px solid var(--line);
   display:flex; flex-direction:column; line-height:1.05;
 }
-.ms-dow { font-size:.56rem; font-weight:800; text-transform:uppercase; color:var(--muted); letter-spacing:.02em; }
+.ms-dow  { font-size:.56rem; font-weight:800; text-transform:uppercase; color:var(--muted); letter-spacing:.02em; }
 .ms-dnum { font-size:.92rem; font-weight:800; color:var(--ink); }
 .ms-col.ms-today .ms-dow, .ms-col.ms-today .ms-dnum { color:var(--blue); }
-.ms-body { display:flex; flex-direction:column; gap:3px; padding:4px 3px; min-height:34px; }
-.ms-none { text-align:center; color:var(--line); font-weight:800; font-size:1rem; line-height:26px; }
+.ms-body { display:flex; flex-direction:column; gap:2px; padding:3px 2px; min-height:20px; }
+.ms-none { text-align:center; color:var(--line); font-weight:800; font-size:.85rem; line-height:22px; }
 
-/* a single shift chip */
-.ms-chip {
-  display:flex; flex-direction:column; align-items:center; gap:1px;
-  position:relative; padding:4px 2px 5px; border-radius:8px;
-  border:1.5px solid transparent;
+/* a single shift row (horizontal) */
+.ms-row {
+  display:flex; align-items:center; gap:2px;
+  padding:2px 3px; border-radius:5px;
+  border:1.5px solid transparent; overflow:hidden;
 }
-.ms-chip.ms-ok      { background:var(--green-soft);  border-color:#bce6cd; }
-.ms-chip.ms-pending { background:var(--amber-soft);  border-color:#f0d49a; }
-.ms-chip.ms-lg      { background:var(--purple-soft); border-color:#cdbcf2; }
-.ms-t   { font-size:.62rem; font-weight:800; color:var(--ink); white-space:nowrap; }
-.ms-code{ font-size:.82rem; font-weight:900; line-height:1; }
-.ms-chip.ms-ok .ms-code      { color:var(--green); }
-.ms-chip.ms-pending .ms-code { color:var(--amber); }
-.ms-st  { font-size:.66rem; line-height:1; }
-.ms-chip.ms-pending .ms-st { color:var(--amber); }
-.ms-chip.ms-ok .ms-st      { color:var(--green); }
-.ms-chip.ms-lg .ms-st      { color:var(--purple); }
+.ms-row.ms-ok      { background:var(--green-soft);  border-color:#bce6cd; }
+.ms-row.ms-pending { background:var(--amber-soft);  border-color:#f0d49a; }
+.ms-row.ms-lg      { background:var(--purple-soft); border-color:#cdbcf2; }
+.ms-t  { font-size:.57rem; font-weight:800; color:var(--ink); white-space:nowrap; flex-shrink:0; }
+.ms-lv { font-size:.68rem; font-weight:900; flex-shrink:0; }
+.ms-row.ms-ok      .ms-lv { color:var(--green); }
+.ms-row.ms-pending .ms-lv { color:var(--amber); }
+.ms-row.ms-lg      .ms-lv { color:var(--purple); }
+.ms-st { font-size:.65rem; line-height:1; margin-left:auto; flex-shrink:0; }
+.ms-row.ms-ok      .ms-st { color:var(--green); }
+.ms-row.ms-pending .ms-st { color:var(--amber); }
+.ms-row.ms-lg      .ms-st { color:var(--purple); }
 
 /* purple life-ring icon = lifeguard duty */
 .ms-ring {
-  display:inline-block; width:15px; height:15px; border-radius:50%;
-  border:4px solid var(--purple); background:#fff; box-sizing:border-box;
+  display:inline-block; width:13px; height:13px; border-radius:50%;
+  border:3.5px solid var(--purple); background:#fff; box-sizing:border-box;
   flex-shrink:0; vertical-align:middle;
 }
 

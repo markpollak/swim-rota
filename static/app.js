@@ -415,26 +415,23 @@ async function viewHome() {
 }
 
 // ---- Shared compact week grid (days = columns, shifts stacked under each day) ----
-function shiftLabel(s) {
+function shiftBadge(s) {
   // Lifeguard duty → purple life-ring icon; a class → short level code (L1, P&T…)
   if (!s.level_id) return `<span class="ms-ring" title="Pool Lifeguard"></span>`;
   const code = (s.level_name || "")
     .replace("Parents & Toddlers", "P&T")
     .replace("Level ", "L");
-  return `<span class="ms-code">${esc(code)}</span>`;
+  return `<span class="ms-lv">${esc(code)}</span>`;
 }
 
 function shiftChip(s, future) {
   const pending = s.status === "requested";
-  const isDuty = !s.level_id;
-  const cls = `ms-chip ${isDuty ? "ms-lg" : pending ? "ms-pending" : "ms-ok"}`;
-  const status = pending ? `<span class="ms-st">⏳</span>` : `<span class="ms-st">✓</span>`;
-  const rel = future ? `<button class="ms-x" data-rel="${s.id}" title="Release shift">×</button>` : "";
-  return `<div class="${cls}" title="${esc(isDuty ? "Pool Lifeguard" : s.level_name || "")} · ${s.start_time}${pending ? " · pending" : " · approved"}">
-    <span class="ms-t">${s.start_time}</span>
-    ${shiftLabel(s)}
-    ${status}${rel}
-  </div>`;
+  const isDuty  = !s.level_id;
+  const cls     = `ms-row ${isDuty ? "ms-lg" : pending ? "ms-pending" : "ms-ok"}`;
+  const st      = pending ? `<span class="ms-st">⏳</span>` : `<span class="ms-st">✓</span>`;
+  const rel     = future ? `<button class="ms-x" data-rel="${s.id}" title="Release shift">×</button>` : "";
+  const ttip    = `${esc(isDuty ? "Pool Lifeguard" : s.level_name || "")} · ${s.start_time}${pending ? " · pending" : " · approved"}`;
+  return `<div class="${cls}" title="${ttip}"><span class="ms-t">${s.start_time}</span>${shiftBadge(s)}${st}${rel}</div>`;
 }
 
 function weekGridHTML(mySlots, weekStart) {
@@ -457,7 +454,7 @@ function weekGridHTML(mySlots, weekStart) {
     </div>`;
   }).join("");
 
-  return `<div class="ms-grid">${cols}</div>`;
+  return `<div class="ms-scroll"><div class="ms-grid">${cols}</div></div>`;
 }
 
 function bindWeekGrid(root, onDone) {
@@ -819,10 +816,10 @@ async function viewMyShifts() {
     </div>
     <div id="msGrid"></div>
     <div class="ms-legend">
-      <span><span class="ms-ring"></span> Lifeguard</span>
-      <span><span class="ms-key ms-key-ok">✓</span> Approved</span>
-      <span><span class="ms-key ms-key-pending">⏳</span> Pending</span>
-      <span><span class="ms-key ms-key-x">×</span> Release</span>
+      <span><span class="ms-ring" style="display:inline-block;vertical-align:middle"></span> Lifeguard</span>
+      <span style="color:var(--green)">✓ Approved</span>
+      <span style="color:var(--amber)">⏳ Pending</span>
+      <span style="color:var(--muted)">× Release</span>
     </div>`;
 
   const grid = $("#msGrid");
