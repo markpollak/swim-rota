@@ -332,7 +332,7 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .wg-pill-more { background: transparent; color: var(--blue); font-weight: 700; padding: 1px 5px; border: none; cursor: pointer; font-size: inherit; }
 .wg-extra-pills { display: contents; }
 .wg-mine { outline: 2px solid var(--magenta); outline-offset: 1px; border-radius: 6px; }
-.wg-mine-requested { outline: 2px solid var(--red); outline-offset: 1px; border-radius: 6px; }
+.wg-mine-requested { outline: 2px dashed var(--red); outline-offset: 1px; border-radius: 6px; }
 .wg-hint { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; padding:0 2px; }
 .wg-legend { font-size: .72rem; font-weight: 700; padding: 3px 10px; border-radius: 6px; }
 
