@@ -968,6 +968,57 @@ function addSlotSheet(date) {
   });
 }
 
+function addAdHocSlotSheet(defaultDate) {
+  const levelOpts = State.levels.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
+  const roleOpts = State.roles.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
+  openSheet(`
+    <h2>Add a single class</h2>
+    <p class="small muted">Creates a one-off open shift on the rota — not linked to any schedule.</p>
+    <div class="stack" style="margin-top:14px">
+      <div class="field"><label>Date</label>
+        <input id="ah-date" type="date" value="${defaultDate}"/></div>
+      <div class="field"><label>Class / level</label>
+        <select id="ah-level"><option value="">Pool duty (lifeguard)</option>${levelOpts}</select></div>
+      <div class="field"><label>Role</label><select id="ah-role">${roleOpts}</select></div>
+      <div class="row">
+        <div class="field" style="flex:1"><label>Start</label>
+          <input id="ah-start" type="time" value="16:00" step="1800"/></div>
+        <div class="field" style="flex:1"><label>End</label>
+          <input id="ah-end" type="time" value="16:30" step="1800"/></div>
+      </div>
+      <div class="field"><label>Label (optional)</label>
+        <input id="ah-label" placeholder="e.g. Squad training"/></div>
+      <button class="btn block" id="ah-save">Add class to rota</button>
+    </div>`);
+  $("#ah-level").addEventListener("change", () => {
+    const sel = $("#ah-level");
+    const name = sel.options[sel.selectedIndex].text;
+    if (!$("#ah-label").value) $("#ah-label").value = name !== "Pool duty (lifeguard)" ? name : "";
+  });
+  $("#ah-save").addEventListener("click", async () => {
+    const date = $("#ah-date").value;
+    const levelId = $("#ah-level").value || null;
+    const roleId = parseInt($("#ah-role").value);
+    const startTime = $("#ah-start").value;
+    const endTime = $("#ah-end").value;
+    const label = $("#ah-label").value.trim() || null;
+    if (!date) return toast("Pick a date", "err");
+    if (!startTime || !endTime || startTime >= endTime) return toast("Set valid start and end times", "err");
+    try {
+      await api("/api/slots", { method: "POST", body: {
+        date, start_time: startTime, end_time: endTime,
+        level_id: levelId ? parseInt(levelId) : null,
+        role_id: roleId, label,
+      }});
+      closeSheet();
+      toast("Class added to rota", "ok");
+      // Navigate to the week containing the new slot
+      State._rotaWeekStart = mondayOf(parseISO(date));
+      rotaBuilder();
+    } catch (err) { toast(err.message, "err"); }
+  });
+}
+
 // ------------------------------------------------------------------ MY SHIFTS
 async function viewMyShifts() {
   loading();
@@ -1591,12 +1642,16 @@ async function rotaBuilder() {
         </div>` : `<div class="small muted" style="flex:1;align-self:center">Click open (blue) shifts to select them. Red and green shifts must have their person removed first.</div>`}
         <div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap">
           <button class="btn sub sm" id="rb-prev">‹</button>
-          <span class="small" style="white-space:nowrap;padding:0 4px">${fmtDate(weekISO).slice(4)}–${fmtDate(weekEnd).slice(4)}</span>
           <button class="btn sub sm" id="rb-next">›</button>
           <button class="btn sub sm${State._rotaWidescreen ? " rb-wide-active" : ""}" id="rb-wide" title="Expand to full browser width — shows full names">⊞ Wide</button>
           <button class="btn sub sm" id="rb-print" title="Print rota as PDF">🖨 Print</button>
         </div>
       </div>
+    </div>
+
+    <div class="rg-week-header">
+      <div class="rg-week-title">${fmtDate(weekISO)} – ${fmtDate(weekEnd)}</div>
+      <button class="btn sub sm" id="rb-add-adhoc">＋ Add a single class</button>
     </div>
 
     <div id="rb-grid">
@@ -1658,6 +1713,7 @@ async function rotaBuilder() {
   $("#rb-next").onclick = () => { State._rotaWeekStart = addDays(State._rotaWeekStart, 7); rotaBuilder(); };
   $("#rb-wide").addEventListener("click", () => { State._rotaWidescreen = !State._rotaWidescreen; rotaBuilder(); });
   $("#rb-print").addEventListener("click", () => window.print());
+  $("#rb-add-adhoc").addEventListener("click", () => addAdHocSlotSheet(toISO(State._rotaWeekStart)));
 
   // Mode toggle (assign / delete)
   mb.querySelectorAll(".rb-mode-btn[data-mode]").forEach((b) => b.addEventListener("click", () => {

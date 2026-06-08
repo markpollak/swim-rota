@@ -511,6 +511,10 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 /* Active state for the Wide toggle button */
 .rb-wide-active { background:var(--blue) !important; color:#fff !important; border-color:var(--blue) !important; }
 
+/* Week date heading above rota grid */
+.rg-week-header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; flex-wrap:wrap; }
+.rg-week-title { font-size:1.05rem; font-weight:800; color:var(--blue); }
+
 /* Mode toggle (Assign / Delete) */
 .rb-mode-toggle { display:inline-flex; border:2px solid var(--line); border-radius:10px; overflow:hidden; }
 .rb-mode-btn { padding:7px 14px; font-size:.82rem; font-weight:700; border:none; background:transparent; cursor:pointer; color:var(--muted); transition:background .12s,color .12s; }
