@@ -1618,7 +1618,8 @@ async function rotaBuilder() {
       cell.addEventListener("click", () => {
         if (cell.dataset.taken) {
           const slot = roleSlots.find((s) => s.id === Number(cell.dataset.sid));
-          if (slot) showSlotRemoveSheet(slot);
+          if (!slot) return;
+          slot.status === "requested" ? showSlotApproveSheet(slot) : showSlotRemoveSheet(slot);
           return;
         }
         cell.classList.toggle("rb-sel");
@@ -1641,12 +1642,13 @@ async function rotaBuilder() {
   // Person change — refresh grid to highlight their existing assignments
   $("#rb-person").addEventListener("change", () => refreshRotaGrid(roleSlots, times, State._rotaWeekStart));
 
-  // Cell toggle / admin removal
+  // Cell toggle / admin removal or approval
   mb.querySelectorAll(".rb-cell[data-sid]").forEach((cell) =>
     cell.addEventListener("click", () => {
       if (cell.dataset.taken) {
         const slot = roleSlots.find((s) => s.id === Number(cell.dataset.sid));
-        if (slot) showSlotRemoveSheet(slot);
+        if (!slot) return;
+        slot.status === "requested" ? showSlotApproveSheet(slot) : showSlotRemoveSheet(slot);
         return;
       }
       cell.classList.toggle("rb-sel");
@@ -2608,6 +2610,35 @@ function showWeekNamesSheet(names, desc, date, time, openSlotId, pendingNames) {
       } catch (err) { toast(err.message, "err"); e.target.disabled = false; e.target.textContent = "Request this shift"; }
     });
   }
+}
+
+function showSlotApproveSheet(slot) {
+  const lvl = slot.level_name || "Pool duty (Lifeguard)";
+  const firstName = (slot.assigned_name || "them").split(" ")[0];
+  const dateStr = fmtDate(slot.date);
+  openSheet(`
+    <h2 style="margin-bottom:16px">Approve this shift?</h2>
+    <div class="detail-rows">
+      <div class="detail-row"><span>Person</span><strong>${esc(slot.assigned_name || "")}</strong></div>
+      <div class="detail-row"><span>Date</span><strong>${esc(dateStr)}</strong></div>
+      <div class="detail-row"><span>Time</span><strong>${slot.start_time}–${slot.end_time}</strong></div>
+      <div class="detail-row"><span>Role</span><strong>${esc(slot.role_name || "")}</strong></div>
+      <div class="detail-row"><span>Class</span><strong>${esc(lvl)}</strong></div>
+    </div>
+    <div style="margin-top:20px;display:flex;gap:10px">
+      <button class="btn green" id="sa-confirm">✓ Approve</button>
+      <button class="btn ghost" id="sa-cancel">Cancel</button>
+    </div>`);
+  document.getElementById("sa-confirm").addEventListener("click", async (e) => {
+    e.target.disabled = true; e.target.textContent = "Approving…";
+    try {
+      await api(`/api/slots/${slot.id}/approve`, { method: "POST" });
+      closeSheet();
+      toast(`${firstName}'s shift approved`, "ok");
+      rotaBuilder();
+    } catch (err) { toast(err.message, "err"); e.target.disabled = false; e.target.textContent = "✓ Approve"; }
+  });
+  document.getElementById("sa-cancel").addEventListener("click", closeSheet);
 }
 
 function showSlotRemoveSheet(slot) {
