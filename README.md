@@ -1,8 +1,8 @@
-# Arc Swim Rota 🏊
+# Staff Pool Rota 🏊
 
-A mobile-first **Progressive Web App** for swim teachers and lifeguards at
-**The Arc, Matlock** (Freedom Leisure) to allocate themselves to half-hour
-poolside shifts, with administrator approval.
+A mobile-first **Progressive Web App** for pool staff — swim teachers and
+lifeguards — to allocate themselves to half-hour poolside shifts, with
+administrator approval.
 
 Built with FastAPI + SQLite + vanilla JS. No build step, minimal dependencies.
 
@@ -29,7 +29,7 @@ Built with FastAPI + SQLite + vanilla JS. No build step, minimal dependencies.
   and a training-status report.
 - **In-app notifications**, double-booking prevention, shift release.
 - **PWA**: installable to a phone home screen, works offline (app shell cached),
-  branded with Freedom Leisure's colours (deep blue `#26358B`, magenta `#A4358B`).
+  branded with a clean blue/magenta palette (deep blue `#26358B`, magenta `#A4358B`).
 
 ## Run locally
 

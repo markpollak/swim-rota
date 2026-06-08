@@ -1,4 +1,8 @@
-# Deploying Arc Swim Rota
+# Deploying Staff Pool Rota
+
+> **Launching at cmwebstats.com (Cloudflare)?** Follow the dedicated, step-by-step
+> guide in **[docs/LAUNCH-cmwebstats.md](docs/LAUNCH-cmwebstats.md)** instead — it
+> covers the Cloudflare DNS + TLS specifics. This file is the general reference.
 
 The app is a single FastAPI service + SQLite, fronted by **Caddy** (which gets you
 free automatic HTTPS). Everything runs in Docker, so a deploy is one command.
@@ -22,7 +26,7 @@ A **$6/month basic droplet** (1 vCPU / 1 GB RAM) is plenty for a pool of this si
 - Create, then note the **public IP**.
 
 ### 2. Point a domain at it (recommended)
-Add a DNS **A record** for e.g. `rota.thearc-matlock.co.uk` → the droplet IP.
+Add a DNS **A record** for e.g. `cmwebstats.com` → the droplet IP.
 (Skip this only for quick testing — see the IP-only note below.)
 
 ### 3. Get the code onto the droplet
@@ -45,13 +49,13 @@ On the droplet:
 ```bash
 cd swim-rota
 cp .env.example .env
-nano .env          # set SITE_ADDRESS=rota.thearc-matlock.co.uk
+nano .env          # set SITE_ADDRESS=cmwebstats.com
                    # set SWIM_SECRET to the output of:  openssl rand -base64 48
 ./deploy.sh
 ```
 `deploy.sh` installs Docker if needed, builds the image, seeds the demo data on
 first run, and starts the app behind Caddy. Within ~30s of DNS resolving,
-`https://rota.thearc-matlock.co.uk` is live with a valid certificate.
+`https://cmwebstats.com` is live with a valid certificate.
 
 ### 5. First login
 - Admin: `admin` / `admin123` — **change this immediately** (Profile → password,

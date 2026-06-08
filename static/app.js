@@ -1,4 +1,4 @@
-/* Arc Swim Rota — single-page PWA front end (vanilla JS).
+/* Staff Pool Rota — single-page PWA front end (vanilla JS).
    Sections: api/state, helpers, login, shell+nav, views (home/calendar/myshifts/
    approvals/reports/manage/profile), modals, boot. */
 "use strict";
@@ -111,9 +111,9 @@ function renderLogin(errMsg) {
   app().innerHTML = `
     <div class="login-wrap">
       <div class="login-logo">
-        <img src="/static/icon-512.png" alt="Arc Swim Rota" />
-        <h1>Arc Swim Rota</h1>
-        <p>The Arc, Matlock · Freedom Leisure</p>
+        <img src="/static/icon-512.png" alt="Staff Pool Rota" />
+        <h1>Staff Pool Rota</h1>
+        <p>Book and manage your shifts</p>
       </div>
       ${errMsg ? `<div class="banner danger">${esc(errMsg)}</div>` : ""}
       <form id="loginForm" class="card stack">
@@ -241,7 +241,7 @@ function renderShell() {
   const nav = NAV.filter((n) => !n.adminOnly || State.user.is_admin);
   app().innerHTML = `
     <header class="topbar">
-      <div class="logo"><img src="/static/icon-192.png" alt=""/> Arc Swim Rota</div>
+      <div class="logo"><img src="/static/icon-192.png" alt=""/> Staff Pool Rota</div>
       <div class="spacer"></div>
       <button class="iconbtn" id="notifBtn" aria-label="Notifications">🔔${
         State.notifUnread ? `<span class="dot">${State.notifUnread}</span>` : ""

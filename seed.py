@@ -1,4 +1,4 @@
-"""Seed the database with realistic dummy data for the Arc, Matlock.
+"""Seed the database with realistic dummy demo data for the staff pool rota.
 
 Run:  python seed.py          (only seeds if empty)
       python seed.py --force  (wipes and reseeds)
@@ -110,7 +110,7 @@ def run(force=False):
                 """INSERT INTO users (username, password_hash, full_name, email, phone,
                         is_admin, training_expiry, created_at)
                    VALUES (?,?,?,?,?,?,?,?)""",
-                (uname, hash_password(pw), full, f"{uname}@thearc-matlock.example",
+                (uname, hash_password(pw), full, f"{uname}@example.com",
                  f"07{random.randint(100,999)} {random.randint(100000,999999)}",
                  admin, expiry, now))
             user_id[uname] = cur.lastrowid
@@ -212,7 +212,7 @@ def run(force=False):
         # Seed messages per channel for demo realism
         DEMO_MESSAGES = {
             "All Staff": [
-                ("admin",  "Welcome to the Arc Swim Rota messaging! Use the relevant channel for your team. 👋"),
+                ("admin",  "Welcome to the Staff Pool Rota messaging! Use the relevant channel for your team. 👋"),
                 ("admin",  "Reminder: please keep your training certificates up to date."),
                 ("emma",   "Thanks! Looking forward to the new system 😊"),
                 ("grace",  "Great stuff, much easier than the old email chain!"),

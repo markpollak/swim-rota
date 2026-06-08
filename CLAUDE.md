@@ -1,7 +1,7 @@
-# Arc Swim Rota — Claude Session Guide
+# Staff Pool Rota — Claude Session Guide
 
 ## What this is
-A mobile-first PWA for swim teachers and lifeguards at The Arc, Matlock (Freedom Leisure) to self-allocate to poolside shifts. Admins approve requests and manage the rota.
+A mobile-first PWA for pool staff (swim teachers and lifeguards) to self-allocate to poolside shifts. Admins approve requests and manage the rota.
 
 ## Stack
 - **Backend:** FastAPI + SQLite (`swim_rota.db`), stdlib auth (PBKDF2 + HMAC tokens)
@@ -31,6 +31,7 @@ Demo logins: `admin` / `admin123` — staff: any of `emma|james|olivia|liam|soph
 
 ## Live server (DigitalOcean droplet)
 
+**Production URL:** `https://cmwebstats.com` (Cloudflare → droplet) — see [docs/LAUNCH-cmwebstats.md](docs/LAUNCH-cmwebstats.md)  
 **IP:** `165.232.96.67`  
 **SSH:** `ssh root@165.232.96.67`  
 **GitHub repo:** `https://github.com/markpollak/swim-rota.git`
@@ -85,12 +86,12 @@ ssh root@165.232.96.67 "cd swim-rota && docker compose ps"
 
 The PWA caches `app.js` and `styles.css` aggressively. Static files are now
 **unversioned** (no `?v=` query strings) and cache-busting is driven by a single
-source of truth: after editing any static file, bump **`const CACHE = "arc-swim-vN"`**
+source of truth: after editing any static file, bump **`const CACHE = "staff-pool-vN"`**
 in `static/sw.js` (the `activate` handler clears the old shell). That's the only
 place to change — `index.html` and the `SHELL` list use plain paths, so versions
 can no longer drift out of sync.
 
-Current version: **v48** — increment to v49 on next static change.
+Current version: **v50** — increment on next static change.
 
 ---
 

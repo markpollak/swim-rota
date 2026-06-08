@@ -20,7 +20,11 @@ services:
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in .env (your domain, or :80 for IP-only)}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # CADDY_CONFIG defaults to ./Caddyfile (auto-HTTPS via Let's Encrypt). For
+      # Cloudflare-proxied mode set CADDY_CONFIG=./Caddyfile.cloudflare in .env
+      # and drop the origin cert in ./certs/ (see docs/LAUNCH-cmwebstats.md).
+      - ${CADDY_CONFIG:-./Caddyfile}:/etc/caddy/Caddyfile:ro
+      - ./certs:/etc/caddy/certs:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:

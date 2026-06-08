@@ -1,4 +1,4 @@
-"""Arc Swim Rota — FastAPI backend.
+"""Staff Pool Rota — FastAPI backend.
 
 Serves the JSON API and the static PWA. Auth is stdlib-only (see auth.py),
 request/response bodies are plain JSON (no multipart dependency required).
@@ -22,7 +22,7 @@ from scheduling import generate_slots, generate_from_schedules, extend_to_horizo
 HERE = os.path.dirname(__file__)
 STATIC = os.path.join(HERE, "static")
 
-app = FastAPI(title="Arc Swim Rota")
+app = FastAPI(title="Staff Pool Rota")
 
 # ----------------------------------------------------------------------------
 # timezone — "today" must be evaluated in the club's local time, not the

@@ -1,4 +1,4 @@
-"""SQLite storage layer for the Arc Swim Rota app.
+"""SQLite storage layer for the Staff Pool Rota app.
 
 Single-file schema + thin helpers. No ORM — keeps deps minimal and the data
 model easy to read. Dates are stored as ISO 'YYYY-MM-DD', times as 'HH:MM'.

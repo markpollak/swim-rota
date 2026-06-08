@@ -1,0 +1,4 @@
+# Cloudflare Origin Certificate goes here on the droplet (gitignored):
+#   certs/cmwebstats.pem   (Origin Certificate)
+#   certs/cmwebstats.key   (Private Key, chmod 600)
+# Only used when CADDY_CONFIG=./Caddyfile.cloudflare. See docs/LAUNCH-cmwebstats.md.

@@ -1,10 +1,10 @@
-/* Arc Swim Rota service worker.
+/* Staff Pool Rota service worker.
  * App-shell cache so the PWA loads offline; API requests always hit the network
  * (never cached) so rota data is fresh.
  * Static files are now unversioned (no ?v= query strings) — bump CACHE on any
  * static change and the activate handler clears the old shell. One source of
  * truth, so versions can't drift out of sync. */
-const CACHE = "arc-swim-v49";
+const CACHE = "staff-pool-v50";
 const SHELL = [
   "/",
   "/static/styles.css",

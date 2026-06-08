@@ -1,7 +1,7 @@
 {
-  "name": "Arc Swim Rota",
-  "short_name": "Swim Rota",
-  "description": "Shift rota for swim teachers and lifeguards at the Arc, Matlock.",
+  "name": "Staff Pool Rota",
+  "short_name": "Pool Rota",
+  "description": "Shift rota for pool staff — teachers and lifeguards book and manage poolside shifts.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

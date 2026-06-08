@@ -1,0 +1,28 @@
+# Caddy config for running BEHIND Cloudflare's proxy (orange cloud).
+#
+# Cloudflare terminates TLS at its edge for visitors; this config uses a
+# Cloudflare *Origin Certificate* so the Cloudflare→droplet hop is also encrypted
+# (required for SSL/TLS mode "Full (strict)"). Unlike the default ./Caddyfile,
+# Caddy does NOT fetch a Let's Encrypt cert here — Cloudflare can interfere with
+# the ACME challenge when proxying, so we present the origin cert directly.
+#
+# Enable by setting CADDY_CONFIG=./Caddyfile.cloudflare in .env and placing the
+# cert at ./certs/cmwebstats.pem + key at ./certs/cmwebstats.key.
+# Full walk-through: docs/LAUNCH-cmwebstats.md
+cmwebstats.com, www.cmwebstats.com {
+	encode gzip
+
+	tls /etc/caddy/certs/cmwebstats.pem /etc/caddy/certs/cmwebstats.key
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		-Server
+	}
+
+	reverse_proxy app:8080
+}

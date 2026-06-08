@@ -7,3 +7,6 @@ swim_rota.db-wal
 swim_rota.db-shm
 .secret
 .env
+# Cloudflare origin cert/key live only on the droplet, never in git
+certs/*
+!certs/.gitkeep
