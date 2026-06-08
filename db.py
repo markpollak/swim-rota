@@ -203,6 +203,7 @@ def init_db():
             "ALTER TABLE roles ADD COLUMN shortcode TEXT",
             "ALTER TABLE channels ADD COLUMN role_id INTEGER",
             "ALTER TABLE channel_members ADD COLUMN via_role INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE audit ADD COLUMN category TEXT NOT NULL DEFAULT 'shifts'",
         ]:
             try:
                 conn.execute(stmt)

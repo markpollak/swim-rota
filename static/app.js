@@ -1169,6 +1169,7 @@ async function adminReports() {
       <button data-rtab="outstanding" class="${State.reportTab === "outstanding" ? "active" : ""}">Outstanding</button>
       <button data-rtab="coverage" class="${State.reportTab === "coverage" ? "active" : ""}">Coverage</button>
       <button data-rtab="training" class="${State.reportTab === "training" ? "active" : ""}">Training</button>
+      <button data-rtab="activity" class="${State.reportTab === "activity" ? "active" : ""}">Activity</button>
     </div>
     <div id="reportBody"><div class="spinner"></div></div>`;
   body.querySelectorAll("[data-rtab]").forEach((b) => b.addEventListener("click", () => {
@@ -1176,6 +1177,7 @@ async function adminReports() {
   }));
   if (State.reportTab === "outstanding") return reportOutstanding();
   if (State.reportTab === "coverage") return reportCoverage();
+  if (State.reportTab === "activity") return reportActivity();
   return reportTraining();
 }
 
@@ -1290,6 +1292,92 @@ async function reportTraining() {
         <span class="pill ${u.status}">${u.status}</span>
       </div>`).join("");
   } catch (err) { rb.innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; }
+}
+
+const ACTIVITY_CATEGORIES = [
+  { key: "", label: "All" },
+  { key: "shifts",   label: "Shifts",   icon: "🏊" },
+  { key: "users",    label: "Users",    icon: "👤" },
+  { key: "messages", label: "Messages", icon: "💬" },
+  { key: "channels", label: "Channels", icon: "📢" },
+  { key: "roles",    label: "Roles",    icon: "🏷" },
+];
+
+const ACTIVITY_LABELS = {
+  shift_request: "Requested shift", shift_release: "Released shift",
+  shift_approve: "Approved shift",  shift_reject: "Rejected shift",
+  shift_assign: "Assigned shift",   shift_bulk_assign: "Bulk assigned",
+  slot_create: "Created slot",      slot_delete: "Deleted slot",
+  slots_generated: "Generated slots",
+  user_create: "Created user",      user_update: "Updated user",
+  user_deactivate: "Deactivated user", user_roles_changed: "Changed roles",
+  role_create: "Created role",      role_update: "Updated role",
+  channel_create: "Created channel", channel_update: "Updated channel",
+  channel_delete: "Deleted channel",
+  message_sent: "Sent message",     message_deleted: "Deleted message",
+};
+
+const ACTIVITY_CATEGORY_COLORS = {
+  shifts: "var(--green)", users: "var(--blue)", messages: "var(--magenta)",
+  channels: "#f59e0b", roles: "#0E9F8E",
+};
+
+async function reportActivity(page = 0) {
+  const rb = $("#reportBody");
+  if (!rb) return;
+  if (page === 0) {
+    const catFilter = State._activityCat || "";
+    rb.innerHTML = `
+      <div class="filterbar" style="margin-bottom:10px">
+        ${ACTIVITY_CATEGORIES.map((c) => `
+          <button class="filterchip${catFilter === c.key ? " active" : ""}" data-acat="${c.key}">
+            ${c.icon ? c.icon + " " : ""}${c.label}
+          </button>`).join("")}
+      </div>
+      <div id="activityFeed"><div class="spinner"></div></div>`;
+    rb.querySelectorAll("[data-acat]").forEach((b) => b.addEventListener("click", () => {
+      State._activityCat = b.dataset.acat;
+      reportActivity(0);
+    }));
+  }
+  const feed = $("#activityFeed");
+  if (!feed) return;
+  if (page === 0) feed.innerHTML = `<div class="spinner"></div>`;
+  try {
+    const cat = State._activityCat || "";
+    const data = await api(`/api/activity?page=${page}${cat ? "&category=" + cat : ""}`);
+    const rows = data.rows;
+    const hasMore = (page + 1) * data.limit < data.total;
+    const html = rows.map((r) => {
+      const color = ACTIVITY_CATEGORY_COLORS[r.category] || "var(--muted)";
+      const label = ACTIVITY_LABELS[r.action] || r.action;
+      const ts = r.ts ? r.ts.replace("T", " ").slice(0, 16) : "";
+      return `<div class="list-item" style="align-items:flex-start;gap:10px">
+        <div style="width:6px;height:6px;border-radius:50%;background:${color};margin-top:6px;flex-shrink:0"></div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;justify-content:space-between;gap:6px">
+            <strong style="font-size:.82rem">${esc(label)}</strong>
+            <span class="small muted" style="white-space:nowrap;font-size:.72rem">${esc(ts)}</span>
+          </div>
+          ${r.actor_name ? `<div class="small muted">${esc(r.actor_name)}</div>` : ""}
+          ${r.detail ? `<div class="small" style="color:var(--ink);opacity:.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.detail)}</div>` : ""}
+        </div>
+      </div>`;
+    }).join("");
+    if (page === 0) {
+      feed.innerHTML = rows.length ? html : `<div class="empty">No activity yet.</div>`;
+    } else {
+      feed.querySelector("[data-load-more]")?.remove();
+      feed.insertAdjacentHTML("beforeend", html);
+    }
+    if (hasMore) {
+      feed.insertAdjacentHTML("beforeend",
+        `<button class="btn ghost block" data-load-more style="margin-top:8px">Load more</button>`);
+      feed.querySelector("[data-load-more]").addEventListener("click", () => reportActivity(page + 1));
+    }
+  } catch (err) {
+    if (page === 0) feed.innerHTML = `<div class="banner danger">${esc(err.message)}</div>`;
+  }
 }
 
 // ---- manage (users / roles / classes / rota / day view)

@@ -254,8 +254,7 @@ def request_slot(slot_id: int, user=Depends(current_user)):
         conn.execute("UPDATE slots SET assigned_user_id=?, status='requested', requested_at=? WHERE id=?",
                      (user["id"], now_iso(), slot_id))
         notify_admins(conn, f"{user['full_name']} requested {s['label'] or 'a shift'} on {s['date']} {s['start_time']}.")
-        conn.execute("INSERT INTO audit (ts, user_id, action, detail) VALUES (?,?,?,?)",
-                     (now_iso(), user["id"], "request", f"slot {slot_id}"))
+        _audit(conn, user["id"], "shifts", "shift_request", _slot_desc(dict(s)))
         return {"ok": True}
 
 
@@ -279,8 +278,7 @@ async def release_slot(slot_id: int, request: Request, user=Depends(current_user
         uid = s["assigned_user_id"]
         conn.execute("""UPDATE slots SET assigned_user_id=NULL, status='open',
                         requested_at=NULL, decided_at=NULL, decided_by=NULL WHERE id=?""", (slot_id,))
-        conn.execute("INSERT INTO audit (ts, user_id, action, detail) VALUES (?,?,?,?)",
-                     (now_iso(), user["id"], "release", f"slot {slot_id}"))
+        _audit(conn, user["id"], "shifts", "shift_release", _slot_desc(dict(s)))
         # If an admin removed someone else's shift, DM the worker
         if user["is_admin"] and uid and uid != user["id"]:
             lvl = s["level_name"] or "Pool duty (Lifeguard)"
@@ -325,8 +323,8 @@ def approve_slot(slot_id: int, admin=Depends(require_admin)):
                      (now_iso(), admin["id"], slot_id))
         notify_user(conn, s["assigned_user_id"],
                     f"✅ Approved: {s['label'] or 'shift'} on {s['date']} at {s['start_time']}.")
-        conn.execute("INSERT INTO audit (ts, user_id, action, detail) VALUES (?,?,?,?)",
-                     (now_iso(), admin["id"], "approve", f"slot {slot_id}"))
+        _audit(conn, admin["id"], "shifts", "shift_approve",
+               f"{s['assigned_name']} — {_slot_desc(dict(s))}" if s.get("assigned_name") else _slot_desc(dict(s)))
         return {"ok": True}
 
 
@@ -359,8 +357,7 @@ async def reject_slot(slot_id: int, request: Request, admin=Depends(require_admi
                 (dm_ch["id"], admin["id"], dm_msg, ts))
             dm_cid = dm_ch["id"]
             dm_mid = cur.lastrowid
-        conn.execute("INSERT INTO audit (ts, user_id, action, detail) VALUES (?,?,?,?)",
-                     (now_iso(), admin["id"], "reject", f"slot {slot_id}: {reason}"))
+        _audit(conn, admin["id"], "shifts", "shift_reject", _slot_desc(dict(s)))
     if dm_cid and dm_mid:
         _fanout(dm_cid, {
             "id": dm_mid, "channel_id": dm_cid, "body": dm_msg,
@@ -383,9 +380,10 @@ async def assign_slot(slot_id: int, request: Request, admin=Depends(require_admi
         conn.execute("""UPDATE slots SET assigned_user_id=?, status='approved',
                         requested_at=?, decided_at=?, decided_by=? WHERE id=?""",
                      (uid, now_iso(), now_iso(), admin["id"], slot_id))
+        worker = conn.execute("SELECT full_name FROM users WHERE id=?", (uid,)).fetchone()
         notify_user(conn, uid, f"You've been assigned {s['label'] or 'a shift'} on {s['date']} at {s['start_time']}.")
-        conn.execute("INSERT INTO audit (ts, user_id, action, detail) VALUES (?,?,?,?)",
-                     (now_iso(), admin["id"], "assign", f"slot {slot_id} -> user {uid}"))
+        _audit(conn, admin["id"], "shifts", "shift_assign",
+               f"{worker['full_name'] if worker else uid} — {_slot_desc(dict(s))}")
         return {"ok": True}
 
 
@@ -396,11 +394,15 @@ async def create_slot(request: Request, admin=Depends(require_admin)):
     if not all(b.get(k) for k in required):
         raise HTTPException(400, "date, start_time, end_time, role_id are required")
     with db.get_db() as conn:
+        lvl = conn.execute("SELECT name FROM levels WHERE id=?", (b.get("level_id"),)).fetchone()
+        role = conn.execute("SELECT name FROM roles WHERE id=?", (b["role_id"],)).fetchone()
         cur = conn.execute(
             """INSERT INTO slots (date, start_time, end_time, level_id, role_id, label, notes, status)
                VALUES (?,?,?,?,?,?,?, 'open')""",
             (b["date"], b["start_time"], b["end_time"], b.get("level_id"),
              b["role_id"], b.get("label"), b.get("notes")))
+        desc = f"{b['date']} {b['start_time']} — {lvl['name'] if lvl else 'Pool duty'} ({role['name'] if role else ''})"
+        _audit(conn, admin["id"], "shifts", "slot_create", desc)
         return {"ok": True, "id": cur.lastrowid}
 
 
@@ -412,6 +414,7 @@ def delete_slot(slot_id: int, admin=Depends(require_admin)):
         if s["assigned_user_id"]:
             notify_user(conn, s["assigned_user_id"],
                         f"A shift you held ({s['date']} {s['start_time']}) was removed by an administrator.")
+        _audit(conn, admin["id"], "shifts", "slot_delete", _slot_desc(dict(s)))
         return {"ok": True}
 
 
@@ -483,9 +486,9 @@ async def bulk_assign(request: Request, admin=Depends(require_admin)):
         if assigned:
             notify_user(conn, uid,
                 f"You've been assigned {len(assigned)} shift{'s' if len(assigned)>1 else ''} by {admin['full_name']}.")
-            conn.execute("INSERT INTO audit (ts, user_id, action, detail) VALUES (?,?,?,?)",
-                         (now_iso(), admin["id"], "bulk_assign",
-                          f"user {uid}: slots {assigned}"))
+            person_name = u_row["full_name"] if u_row else str(uid)
+            _audit(conn, admin["id"], "shifts", "shift_bulk_assign",
+                   f"{person_name} — {len(assigned)} shift{'s' if len(assigned)>1 else ''}")
     return {"ok": True, "assigned": len(assigned),
             "skipped": len(skipped_details), "skipped_details": skipped_details}
 
@@ -535,6 +538,7 @@ async def create_user(request: Request, admin=Depends(require_admin)):
         for rid in b.get("role_ids", []):
             conn.execute("INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?,?)", (uid, rid))
             _sync_role_channel_add(conn, uid, rid)
+        _audit(conn, admin["id"], "users", "user_create", b["full_name"])
         # Auto-create DM channel for the new user
         ensure_dm_channels(conn)
         return {"ok": True, "id": uid}
@@ -571,6 +575,14 @@ async def update_user(user_id: int, request: Request, admin=Depends(require_admi
                 _sync_role_channel_add(conn, user_id, rid)
             for rid in (old_roles - new_roles):
                 _sync_role_channel_remove(conn, user_id, rid)
+        target = conn.execute("SELECT full_name FROM users WHERE id=?", (user_id,)).fetchone()
+        target_name = target["full_name"] if target else str(user_id)
+        if "active" in b and not b["active"]:
+            _audit(conn, admin["id"], "users", "user_deactivate", target_name)
+        elif "role_ids" in b:
+            _audit(conn, admin["id"], "users", "user_roles_changed", target_name)
+        else:
+            _audit(conn, admin["id"], "users", "user_update", target_name)
         return {"ok": True}
 
 
@@ -619,6 +631,7 @@ async def add_role(request: Request, admin=Depends(require_admin)):
                 (b["name"], 1 if b.get("requires_training") else 0, b.get("color") or "#0E9F8E", mx, b.get("shortcode") or None))
         except Exception:
             raise HTTPException(409, "A role with that name already exists.")
+        _audit(conn, admin["id"], "roles", "role_create", b["name"])
         return {"ok": True, "id": cur.lastrowid}
 
 
@@ -637,6 +650,8 @@ async def update_role(role_id: int, request: Request, admin=Depends(require_admi
         if fields:
             params.append(role_id)
             conn.execute(f"UPDATE roles SET {','.join(fields)} WHERE id=?", params)
+        role = conn.execute("SELECT name FROM roles WHERE id=?", (role_id,)).fetchone()
+        _audit(conn, admin["id"], "roles", "role_update", role["name"] if role else str(role_id))
         return {"ok": True}
 
 
@@ -734,6 +749,8 @@ async def generate(request: Request, admin=Depends(require_admin)):
     end = start + timedelta(weeks=weeks) - timedelta(days=1)
     with db.get_db() as conn:
         created = generate_slots(conn, start, end) + generate_from_schedules(conn, start, end)
+        _audit(conn, admin["id"], "shifts", "slots_generated",
+               f"{created} slots generated to {end.isoformat()}")
         return {"ok": True, "created": created, "from": start.isoformat(), "to": end.isoformat()}
 
 
@@ -887,6 +904,32 @@ def report_training(admin=Depends(require_admin)):
 
 
 # ----------------------------------------------------------------------------
+# activity log
+# ----------------------------------------------------------------------------
+@app.get("/api/activity")
+def get_activity(request: Request, admin=Depends(require_admin)):
+    category = request.query_params.get("category") or None
+    page = max(0, int(request.query_params.get("page", 0)))
+    limit = 50
+    with db.get_db() as conn:
+        if category:
+            rows = conn.execute(
+                """SELECT a.id, a.ts, a.category, a.action, a.detail, u.full_name actor_name
+                   FROM audit a LEFT JOIN users u ON u.id=a.user_id
+                   WHERE a.category=? ORDER BY a.id DESC LIMIT ? OFFSET ?""",
+                (category, limit, page * limit)).fetchall()
+            total = conn.execute("SELECT COUNT(*) c FROM audit WHERE category=?", (category,)).fetchone()["c"]
+        else:
+            rows = conn.execute(
+                """SELECT a.id, a.ts, a.category, a.action, a.detail, u.full_name actor_name
+                   FROM audit a LEFT JOIN users u ON u.id=a.user_id
+                   ORDER BY a.id DESC LIMIT ? OFFSET ?""",
+                (limit, page * limit)).fetchall()
+            total = conn.execute("SELECT COUNT(*) c FROM audit").fetchone()["c"]
+        return {"rows": db.dict_rows(rows), "total": total, "page": page, "limit": limit}
+
+
+# ----------------------------------------------------------------------------
 # notifications
 # ----------------------------------------------------------------------------
 @app.get("/api/notifications")
@@ -938,6 +981,17 @@ def _sync_role_channel_remove(conn, user_id: int, role_id: int):
         conn.execute(
             "DELETE FROM channel_members WHERE channel_id=? AND user_id=? AND via_role=1",
             (ch["id"], user_id))
+
+
+def _audit(conn, user_id, category: str, action: str, detail: str = None):
+    conn.execute(
+        "INSERT INTO audit (ts, user_id, category, action, detail) VALUES (?,?,?,?,?)",
+        (now_iso(), user_id, category, action, detail))
+
+
+def _slot_desc(s: dict) -> str:
+    lvl = s.get("level_name") or "Pool duty"
+    return f"{s.get('date')} {s.get('start_time')} — {lvl}"
 
 
 def _user_channel_ids(conn, user_id: int):
@@ -1027,6 +1081,7 @@ async def create_channel(request: Request, admin=Depends(require_admin)):
             for ru in role_users:
                 conn.execute("INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at, via_role) VALUES (?,?,?,1)",
                              (cid, ru["user_id"], now_iso()))
+        _audit(conn, admin["id"], "channels", "channel_create", b["name"])
         return {"ok": True, "id": cid}
 
 
@@ -1073,13 +1128,17 @@ async def update_channel(cid: int, request: Request, admin=Depends(require_admin
                 conn.execute(
                     "INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at, via_role) VALUES (?,?,?,0)",
                     (cid, uid, now_iso()))
+        ch = conn.execute("SELECT name FROM channels WHERE id=?", (cid,)).fetchone()
+        _audit(conn, admin["id"], "channels", "channel_update", ch["name"] if ch else str(cid))
         return {"ok": True}
 
 
 @app.delete("/api/channels/{cid}")
 def delete_channel(cid: int, admin=Depends(require_admin)):
     with db.get_db() as conn:
+        ch = conn.execute("SELECT name FROM channels WHERE id=?", (cid,)).fetchone()
         conn.execute("UPDATE channels SET active=0 WHERE id=?", (cid,))
+        _audit(conn, admin["id"], "channels", "channel_delete", ch["name"] if ch else str(cid))
         return {"ok": True}
 
 
@@ -1144,6 +1203,10 @@ async def post_message(cid: int, request: Request, user=Depends(current_user)):
         "user_id": user["id"], "full_name": user["full_name"], "username": user["username"],
     }
     _fanout(cid, payload)
+    with db.get_db() as conn:
+        ch = conn.execute("SELECT name FROM channels WHERE id=?", (cid,)).fetchone()
+        _audit(conn, user["id"], "messages", "message_sent",
+               f"#{ch['name'] if ch else cid}: {body[:80]}{'…' if len(body)>80 else ''}")
     return {"ok": True, "id": mid}
 
 
@@ -1169,6 +1232,9 @@ def delete_message(cid: int, mid: int, user=Depends(current_user)):
             raise HTTPException(403, "Can only delete your own messages")
         conn.execute("UPDATE messages SET deleted=1 WHERE id=?", (mid,))
         _fanout(cid, {"deleted": True, "id": mid, "channel_id": cid})
+        ch = conn.execute("SELECT name FROM channels WHERE id=?", (cid,)).fetchone()
+        _audit(conn, user["id"], "messages", "message_deleted",
+               f"#{ch['name'] if ch else cid}")
         return {"ok": True}
 
 
