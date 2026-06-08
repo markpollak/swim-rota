@@ -309,7 +309,7 @@ function slotActions(s) {
   return acts.join("");
 }
 
-function classCard(g) {
+function classCard(g, showTime = true) {
   const color = roleColor(g.slots[0].role_id);
   const title = g.isDuty ? "Pool Lifeguard" : g.level_name;
   const sub = g.isDuty ? "On duty — whole session" : "";
@@ -325,7 +325,7 @@ function classCard(g) {
     <div class="classcard" style="border-left-color:${color}" data-card>
       <div class="ch">
         <div><span class="t">${esc(title)}</span>${sub ? ` <span class="muted small">· ${esc(sub)}</span>` : ""}</div>
-        <span class="time">${g.start}–${g.end}</span>
+        ${showTime ? `<span class="time">${g.start}–${g.end}</span>` : ""}
       </div>
       ${rows}
     </div>`;
@@ -741,11 +741,28 @@ function renderDayBody(allSlots) {
     const reason = allSlots.length && slots.length === 0 ? "No shifts match the selected filter." : `No classes scheduled for ${fmtDate(State.selectedDate)}.`;
     body.innerHTML = `${hintHtml}<div class="empty"><div class="big">📭</div>${reason}<br/>${addBtn}</div>`;
   } else {
-    body.innerHTML = `${hintHtml}<div class="between" style="margin-bottom:4px">
+    // Group cards by time slot for the sectioned 2-col layout
+    const groups = groupSlots(slots);
+    const byTime = new Map();
+    for (const g of groups) {
+      const key = `${g.start}|${g.end}`;
+      if (!byTime.has(key)) byTime.set(key, []);
+      byTime.get(key).push(g);
+    }
+    const slotSections = [...byTime.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, cards]) => {
+        const [start, end] = key.split("|");
+        return `<div class="dv-slot">
+          <div class="dv-slot-hdr">${start} – ${end}</div>
+          <div class="dv-slot-grid">${cards.map((g) => classCard(g, false)).join("")}</div>
+        </div>`;
+      }).join("");
+
+    body.innerHTML = `${hintHtml}<div class="between" style="margin-bottom:10px">
         <div class="day-head" style="margin:0">${fmtLong(State.selectedDate)}</div>
         ${addBtn}
-      </div>` +
-      groupSlots(slots).map(classCard).join("");
+      </div>${slotSections}`;
     bindSlotActions(body);
   }
   if (State.user.is_admin) {

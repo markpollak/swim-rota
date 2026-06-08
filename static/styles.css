@@ -153,7 +153,11 @@ label { display: block; font-size: .82rem; font-weight: 600; color: var(--muted)
 /* ---------- slot / class cards ---------- */
 .day-head { font-size: 1.02rem; font-weight: 800; color: var(--blue); margin: 18px 2px 8px; display:flex; align-items:baseline; gap:8px;}
 .day-head .date { color: var(--muted); font-weight: 600; font-size: .85rem; }
-.classcard { border: 1px solid var(--line); border-left: 5px solid var(--blue); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; background:#fff; box-shadow: var(--shadow);}
+.dv-slot { margin-bottom: 18px; }
+.dv-slot-hdr { font-size: .82rem; font-weight: 800; color: var(--blue); padding: 5px 8px; background: var(--blue-soft); border-radius: 8px; margin-bottom: 8px; letter-spacing: .01em; }
+.dv-slot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 380px) { .dv-slot-grid { grid-template-columns: 1fr; } }
+.classcard { border: 1px solid var(--line); border-left: 5px solid var(--blue); border-radius: 12px; padding: 12px 14px; margin-bottom: 0; background:#fff; box-shadow: var(--shadow);}
 .classcard .ch { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom: 8px;}
 .classcard .ch .t { font-weight: 800; }
 .classcard .ch .time { font-size: .8rem; color: var(--muted); font-weight: 700; }
