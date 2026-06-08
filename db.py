@@ -198,6 +198,31 @@ def get_db():
         conn.close()
 
 
+@contextmanager
+def get_db_immediate():
+    """Like get_db, but takes SQLite's write lock up front via BEGIN IMMEDIATE.
+
+    Use this for any check-then-write sequence (e.g. "is this slot still open?
+    → claim it") so concurrent writers serialise instead of racing: the second
+    transaction blocks (up to busy_timeout) until the first commits, then sees
+    committed state. Commits on clean exit, rolls back on any exception.
+    """
+    conn = connect()
+    conn.isolation_level = None  # manage the transaction explicitly (no implicit BEGIN)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        yield conn
+        conn.execute("COMMIT")
+    except BaseException:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)

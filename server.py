@@ -279,7 +279,9 @@ def _get_slot(conn, slot_id):
 
 @app.post("/api/slots/{slot_id}/request")
 def request_slot(slot_id: int, user=Depends(current_user)):
-    with db.get_db() as conn:
+    # get_db_immediate() holds the write lock across the check-and-claim so two
+    # people can't both "win" the same open slot (see check + conditional UPDATE).
+    with db.get_db_immediate() as conn:
         s = _get_slot(conn, slot_id)
         if s["status"] != "open":
             raise HTTPException(409, "That shift is no longer available.")
@@ -287,8 +289,14 @@ def request_slot(slot_id: int, user=Depends(current_user)):
             raise HTTPException(409, "You cannot request a shift in the past.")
         check_qualified(conn, user["id"], s)
         check_double_book(conn, user["id"], s)
-        conn.execute("UPDATE slots SET assigned_user_id=?, status='requested', requested_at=? WHERE id=?",
-                     (user["id"], now_iso(), slot_id))
+        # Conditional on still being open — guards against a concurrent claim that
+        # slipped in between the SELECT above and this UPDATE.
+        cur = conn.execute(
+            "UPDATE slots SET assigned_user_id=?, status='requested', requested_at=? "
+            "WHERE id=? AND status='open'",
+            (user["id"], now_iso(), slot_id))
+        if cur.rowcount == 0:
+            raise HTTPException(409, "That shift was just taken by someone else.")
         notify_admins(conn, f"{user['full_name']} requested {s['label'] or 'a shift'} on {s['date']} {s['start_time']}.")
         _audit(conn, user["id"], "shifts", "shift_request", _slot_desc(dict(s)))
         return {"ok": True}
@@ -349,14 +357,19 @@ async def release_slot(slot_id: int, request: Request, user=Depends(current_user
 
 @app.post("/api/slots/{slot_id}/approve")
 def approve_slot(slot_id: int, admin=Depends(require_admin)):
-    with db.get_db() as conn:
+    with db.get_db_immediate() as conn:
         s = _get_slot(conn, slot_id)
         if s["status"] != "requested" or not s["assigned_user_id"]:
             raise HTTPException(409, "Nothing to approve on that shift.")
         check_qualified(conn, s["assigned_user_id"], s)
         check_double_book(conn, s["assigned_user_id"], s, exclude_id=slot_id)
-        conn.execute("UPDATE slots SET status='approved', decided_at=?, decided_by=? WHERE id=?",
-                     (now_iso(), admin["id"], slot_id))
+        # Guard on the request not having changed (released/reassigned) since we read it.
+        cur = conn.execute(
+            "UPDATE slots SET status='approved', decided_at=?, decided_by=? "
+            "WHERE id=? AND status='requested' AND assigned_user_id=?",
+            (now_iso(), admin["id"], slot_id, s["assigned_user_id"]))
+        if cur.rowcount == 0:
+            raise HTTPException(409, "That request changed before it could be approved.")
         notify_user(conn, s["assigned_user_id"],
                     f"✅ Approved: {s['label'] or 'shift'} on {s['date']} at {s['start_time']}.")
         _audit(conn, admin["id"], "shifts", "shift_approve",
@@ -409,13 +422,18 @@ async def assign_slot(slot_id: int, request: Request, admin=Depends(require_admi
     uid = body.get("user_id")
     if not uid:
         raise HTTPException(400, "user_id required")
-    with db.get_db() as conn:
+    with db.get_db_immediate() as conn:
         s = _get_slot(conn, slot_id)
         check_qualified(conn, uid, s)
         check_double_book(conn, uid, s, exclude_id=slot_id)
-        conn.execute("""UPDATE slots SET assigned_user_id=?, status='approved',
-                        requested_at=?, decided_at=?, decided_by=? WHERE id=?""",
-                     (uid, now_iso(), now_iso(), admin["id"], slot_id))
+        # Only fill a slot that's still open, so two admins can't silently
+        # overwrite each other (release first to reassign a taken slot).
+        cur = conn.execute(
+            """UPDATE slots SET assigned_user_id=?, status='approved',
+                        requested_at=?, decided_at=?, decided_by=? WHERE id=? AND status='open'""",
+            (uid, now_iso(), now_iso(), admin["id"], slot_id))
+        if cur.rowcount == 0:
+            raise HTTPException(409, "That shift is no longer open.")
         worker = conn.execute("SELECT full_name FROM users WHERE id=?", (uid,)).fetchone()
         notify_user(conn, uid, f"You've been assigned {s['label'] or 'a shift'} on {s['date']} at {s['start_time']}.")
         _audit(conn, admin["id"], "shifts", "shift_assign",
@@ -469,7 +487,7 @@ async def bulk_assign(request: Request, admin=Depends(require_admin)):
     if not uid or not slot_ids:
         raise HTTPException(400, "user_id and slot_ids required")
     assigned, skipped_details = [], []
-    with db.get_db() as conn:
+    with db.get_db_immediate() as conn:
         u_row = conn.execute("SELECT full_name FROM users WHERE id=?", (uid,)).fetchone()
         person = (u_row["full_name"].split()[0] if u_row else "They")
         for sid in slot_ids:
@@ -513,11 +531,16 @@ async def bulk_assign(request: Request, admin=Depends(require_admin)):
                     "role_name": s["role_name"], "reason": reason})
                 continue
             status = "approved" if auto_approve else "requested"
-            conn.execute(
+            cur = conn.execute(
                 """UPDATE slots SET assigned_user_id=?, status=?, requested_at=?,
-                        decided_at=?, decided_by=? WHERE id=?""",
+                        decided_at=?, decided_by=? WHERE id=? AND status='open'""",
                 (uid, status, now_iso(), now_iso() if auto_approve else None,
                  admin["id"] if auto_approve else None, sid))
+            if cur.rowcount == 0:  # claimed by someone else between the check and here
+                skipped_details.append({"slot_id": sid, "date": s["date"],
+                    "start_time": s["start_time"], "level_name": s["level_name"],
+                    "role_name": s["role_name"], "reason": "Slot already taken"})
+                continue
             assigned.append(sid)
         if assigned:
             notify_user(conn, uid,
