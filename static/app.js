@@ -276,6 +276,7 @@ function updateMsgBadge(delta) {
 
 function go(view) {
   State.view = view;
+  document.body.classList.remove("rota-wide");
   app().querySelectorAll("[data-nav]").forEach((b) =>
     b.classList.toggle("active", b.dataset.nav === view));
   renderView();
@@ -1496,11 +1497,12 @@ function adminRotaView() {
     State.rotaSubTab = b.dataset.rstab; adminRotaView();
   }));
   if (State.rotaSubTab === "builder") rotaBuilder();
-  else adminDayView();
+  else { document.body.classList.remove("rota-wide"); adminDayView(); }
 }
 
 // ------------------------------------------------------------------ ROTA BUILDER
 async function rotaBuilder() {
+  document.body.classList.toggle("rota-wide", !!State._rotaWidescreen);
   const mb = $("#manageBody");
   mb.innerHTML = `<div class="spinner"></div>`;
   const [users, allSlots] = await Promise.all([

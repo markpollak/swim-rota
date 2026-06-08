@@ -4,7 +4,7 @@
  * Static files are now unversioned (no ?v= query strings) — bump CACHE on any
  * static change and the activate handler clears the old shell. One source of
  * truth, so versions can't drift out of sync. */
-const CACHE = "staff-pool-v51";
+const CACHE = "staff-pool-v52";
 const SHELL = [
   "/",
   "/static/styles.css",

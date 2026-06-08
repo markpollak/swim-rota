@@ -511,16 +511,13 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 /* Active state for the Wide toggle button */
 .rb-wide-active { background:var(--blue) !important; color:#fff !important; border-color:var(--blue) !important; }
 
-/* When widescreen is on, break out of the 720px app-main container to 95vw */
-.rg-wide {
-  width: 95vw;
-  max-width: 95vw !important;
-  /* Full-bleed: left 50% of container + translateX(-50% of self) centres at viewport mid */
-  position: relative;
-  left: 50%;
-  transform: translateX(-50%);
-  overflow-x: auto;
+/* Expand the app-main container itself — no breakout tricks needed */
+body.rota-wide .app-main {
+  max-width: none;
+  padding-left: 8px;
+  padding-right: 8px;
 }
+/* Wider cells when the container has room */
 .rg-wide .rg-th    { min-width: 100px; }
 .rg-wide .rg-cell  { max-width: 140px; }
 .rg-wide .rb-cell  { max-width: 130px; font-size: .72rem; white-space: normal; overflow: visible; text-overflow: clip; }
