@@ -751,11 +751,14 @@ function renderWeekGrid(allSlots) {
           const openId = openSlots[0]?.id;
           const canReq = openId && userHasRole(firstSlot.role_id);
           // Show names if any approved; add open slot id when there's still a free slot to request
+          const pendingNames = requestedSlots.map((s) => s.assigned_name?.split(" ")[0]).filter(Boolean).join(", ");
           let dAttr = "";
           if (ok || isPartial) {
-            dAttr = `data-pill-names="${esc(names)}" data-pill-desc="Pool duty 🛟"${canReq ? ` data-pill-open="${openId}"` : ""}`;
+            dAttr = `data-pill-names="${esc(names)}" data-pill-desc="Pool duty 🛟"${canReq ? ` data-pill-open="${openId}"` : ""}${pendingNames && !canReq ? ` data-pill-pending="${esc(pendingNames)}"` : ""}`;
           } else if (canReq) {
             dAttr = `data-pill-open="${openId}" data-pill-desc="Pool duty 🛟"`;
+          } else if (pendingNames) {
+            dAttr = `data-pill-pending="${esc(pendingNames)}" data-pill-desc="Pool duty 🛟"`;
           }
           const icon = isPartial ? "⚡ " : (!ok && hasPending) ? "⏳ " : "";
           const count = isPartial && hasPending
@@ -776,8 +779,11 @@ function renderWeekGrid(allSlots) {
         const who = assignedSlot ? ` · ${assignedSlot.assigned_name?.split(" ")[0]}` : pendingSlot ? " · ⏳" : "";
         const names = g.slots.filter((s) => s.status === "approved" && s.assigned_name).map((s) => s.assigned_name.split(" ")[0]).join(", ");
         const canReq = openSlot && userHasRole(openSlot.role_id);
+        const pendingName = pendingSlot?.assigned_name?.split(" ")[0] || "";
         const dAttr = cls === "wg-pill-ok"
           ? `data-pill-names="${esc(names)}" data-pill-desc="${esc(shortName)}"`
+          : cls === "wg-pill-pending"
+          ? `data-pill-pending="${esc(pendingName)}" data-pill-desc="${esc(shortName)}"`
           : (cls === "wg-pill-open" && canReq) ? `data-pill-open="${openSlot.id}" data-pill-desc="${esc(shortName)}"` : "";
         return `<div class="wg-pill ${cls}${mineClass}" ${dAttr}>${esc(shortName)}${esc(who)}</div>`;
       };
@@ -832,12 +838,20 @@ function renderWeekGrid(allSlots) {
       showWeekRequestSheet(pill.dataset.pillOpen, pill.dataset.pillDesc, td?.dataset.date, td?.dataset.time);
     }));
 
-  // covered/partial pill → names sheet (may also carry an open slot to request)
+  // pending-only pill (no names, no open) → show who requested
+  body.querySelectorAll(".wg-pill[data-pill-pending]:not([data-pill-names]):not([data-pill-open])").forEach((pill) =>
+    pill.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const td = pill.closest("[data-date]");
+      showWeekPendingSheet(pill.dataset.pillPending, pill.dataset.pillDesc, td?.dataset.date, td?.dataset.time);
+    }));
+
+  // covered/partial pill → names sheet (may also carry an open slot or pending names)
   body.querySelectorAll(".wg-pill[data-pill-names]").forEach((pill) =>
     pill.addEventListener("click", (e) => {
       e.stopPropagation();
       const td = pill.closest("[data-date]");
-      showWeekNamesSheet(pill.dataset.pillNames, pill.dataset.pillDesc, td?.dataset.date, td?.dataset.time, pill.dataset.pillOpen);
+      showWeekNamesSheet(pill.dataset.pillNames, pill.dataset.pillDesc, td?.dataset.date, td?.dataset.time, pill.dataset.pillOpen, pill.dataset.pillPending);
     }));
 
   // clicking a cell switches to day view for that date
@@ -2530,15 +2544,38 @@ function showWeekRequestSheet(slotId, desc, date, time) {
   document.getElementById("wkr-cancel").addEventListener("click", closeSheet);
 }
 
-function showWeekNamesSheet(names, desc, date, time, openSlotId) {
+function showWeekPendingSheet(pendingNames, desc, date, time) {
+  const dateStr = date ? fmtDate(date) : "";
+  const names = (pendingNames || "").split(", ").filter(Boolean);
+  const msg = names.length === 1
+    ? `${esc(names[0])} has already requested this shift and is awaiting admin approval.`
+    : `${esc(names.join(" and "))} have already requested this shift and are awaiting admin approval.`;
+  openSheet(`
+    <h2 style="margin-bottom:4px">${esc(desc || "Shift")}</h2>
+    <p class="small muted" style="margin-bottom:14px">${esc(dateStr)}${time ? " · " + esc(time) : ""}</p>
+    <div class="banner" style="background:var(--amber-soft);color:var(--amber);border-radius:8px;padding:10px 14px;margin-bottom:16px">
+      ⏳ ${msg}
+    </div>
+    <button class="btn ghost block" id="wkp-close">Close</button>`);
+  document.getElementById("wkp-close").addEventListener("click", closeSheet);
+}
+
+function showWeekNamesSheet(names, desc, date, time, openSlotId, pendingNames) {
   const dateStr = date ? fmtDate(date) : "";
   const nameList = (names || "").split(", ").filter(Boolean);
+  const pendingList = (pendingNames || "").split(", ").filter(Boolean);
+  const pendingMsg = pendingList.length === 1
+    ? `⏳ ${esc(pendingList[0])} has already requested the remaining slot — awaiting admin approval.`
+    : pendingList.length > 1
+    ? `⏳ ${esc(pendingList.join(" and "))} have already requested the remaining slots — awaiting admin approval.`
+    : "";
   openSheet(`
     <h2 style="margin-bottom:4px">${esc(desc || "Shift")}</h2>
     <p class="small muted" style="margin-bottom:14px">${esc(dateStr)}${time ? " · " + esc(time) : ""}</p>
     <div class="detail-rows">
       ${nameList.map((n) => `<div class="detail-row"><span>Staff</span><strong>${esc(n)}</strong></div>`).join("")}
     </div>
+    ${pendingMsg ? `<p class="small" style="margin-top:12px;color:var(--amber)">${pendingMsg}</p>` : ""}
     ${openSlotId ? `
     <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)"/>
     <p class="small muted" style="margin-bottom:12px">There is still an open slot — would you like to request it?</p>
