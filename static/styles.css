@@ -326,6 +326,27 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .wg-hint { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
 .wg-legend { font-size: .72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
 
+/* ---------- home shifts week grid ---------- */
+.ms-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 10px; border: 1px solid var(--line); }
+.ms-table { border-collapse: collapse; font-size: .65rem; min-width: 100%; }
+.ms-time-h { position: sticky; left: 0; background: var(--blue-soft); z-index: 3; width: 42px; border: 1px solid var(--line); }
+.ms-th { background: var(--blue-soft); text-align: center; padding: 4px 2px; font-weight: 700; color: var(--blue); min-width: 42px; border: 1px solid var(--line); line-height: 1.2; }
+.ms-th.ms-today { background: var(--blue); color: #fff; }
+.ms-th.ms-past { opacity: .55; }
+.ms-dow { font-size: .6rem; font-weight: 700; text-transform: uppercase; display: block; }
+.ms-dnum { font-size: .88rem; font-weight: 800; }
+.ms-time { position: sticky; left: 0; background: #fff; z-index: 2; padding: 2px 4px; color: var(--muted); font-size: .6rem; font-weight: 700; white-space: nowrap; border: 1px solid var(--line); width: 42px; vertical-align: top; }
+.ms-cell { border: 1px solid var(--line); padding: 2px; vertical-align: top; min-width: 42px; }
+.ms-empty { background: #fafafa; }
+.ms-pill { border-radius: 5px; padding: 2px 4px; margin-bottom: 2px; font-size: .6rem; font-weight: 700; display: flex; align-items: center; gap: 2px; line-height: 1.3; }
+.ms-ok { background: var(--green-soft); color: var(--green); }
+.ms-pending { background: var(--amber-soft); color: var(--amber); }
+.ms-lg { background: var(--purple-soft); color: var(--purple); }
+.ms-lbl { flex: 1; }
+.ms-chk { opacity: .7; flex-shrink: 0; }
+.ms-x { background: none; border: none; color: inherit; opacity: .45; font-size: .75rem; cursor: pointer; padding: 0 1px; flex-shrink: 0; line-height: 1; }
+.ms-x:hover { opacity: 1; }
+
 /* ---------- rota builder grid ---------- */
 .rg-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: 10px; max-width: 100%; }
 .rg-table { border-collapse: collapse; font-size: .72rem; }
