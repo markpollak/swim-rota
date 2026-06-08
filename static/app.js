@@ -1779,30 +1779,7 @@ async function rotaBuilder() {
     } catch (err) { toast(err.message, "err"); btn.disabled = false; btn.textContent = "Assign selected slots"; }
   });
 
-  // Delete apply button
-  const delBtn = document.getElementById("rb-delete-apply");
-  if (delBtn) delBtn.addEventListener("click", (evt) => {
-    evt.stopPropagation();
-    const ids = [...document.querySelectorAll(".rb-del-sel[data-sid]")].map((c) => Number(c.dataset.sid));
-    if (!ids.length) return;
-    openSheet(`
-      <h2 style="margin-bottom:12px">Delete ${ids.length} shift${ids.length !== 1 ? "s" : ""}?</h2>
-      <p class="small muted">These open shifts will be removed from the rota. This can't be undone.</p>
-      <div style="margin-top:18px;display:flex;gap:10px">
-        <button class="btn danger" id="rbd-confirm">Yes, delete</button>
-        <button class="btn ghost" id="rbd-cancel">Cancel</button>
-      </div>`);
-    document.getElementById("rbd-confirm").addEventListener("click", async (e) => {
-      e.target.disabled = true; e.target.textContent = "Deleting…";
-      try {
-        const r = await api("/api/slots/bulk-delete", { method: "POST", body: { slot_ids: ids } });
-        closeSheet();
-        toast(`Deleted ${r.deleted} shift${r.deleted !== 1 ? "s" : ""}`, "ok");
-        rotaBuilder();
-      } catch (err) { toast(err.message, "err"); e.target.disabled = false; e.target.textContent = "Yes, delete"; }
-    });
-    document.getElementById("rbd-cancel").addEventListener("click", closeSheet);
-  });
+  // Delete apply button — listener is a permanent delegated handler (see boot)
 
   $("#rb-clearsel").addEventListener("click", () => {
     mb.querySelectorAll(".rb-sel, .rb-del-sel").forEach((c) => c.classList.remove("rb-sel", "rb-del-sel"));
@@ -2998,5 +2975,31 @@ function refreshShiftViews() {
 }
 document.addEventListener("visibilitychange", refreshShiftViews);
 setInterval(refreshShiftViews, 3 * 60 * 1000);
+
+// Permanent delegated handler for the delete-apply button.
+// Attached once here so it survives async rotaBuilder DOM rebuilds.
+document.addEventListener("click", (evt) => {
+  if (!evt.target.closest("#rb-delete-apply")) return;
+  evt.stopPropagation();
+  const ids = [...document.querySelectorAll(".rb-del-sel[data-sid]")].map((c) => Number(c.dataset.sid));
+  if (!ids.length) return;
+  const sheet = openSheet(`
+    <h2 style="margin-bottom:12px">Delete ${ids.length} shift${ids.length !== 1 ? "s" : ""}?</h2>
+    <p class="small muted">These open shifts will be removed from the rota. This can't be undone.</p>
+    <div style="margin-top:18px;display:flex;gap:10px">
+      <button class="btn danger" id="rbd-confirm">Yes, delete</button>
+      <button class="btn ghost" id="rbd-cancel">Cancel</button>
+    </div>`);
+  sheet.querySelector("#rbd-confirm").addEventListener("click", async (e) => {
+    e.target.disabled = true; e.target.textContent = "Deleting…";
+    try {
+      const r = await api("/api/slots/bulk-delete", { method: "POST", body: { slot_ids: ids } });
+      closeSheet();
+      toast(`Deleted ${r.deleted} shift${r.deleted !== 1 ? "s" : ""}`, "ok");
+      rotaBuilder();
+    } catch (err) { toast(err.message, "err"); e.target.disabled = false; e.target.textContent = "Yes, delete"; }
+  });
+  sheet.querySelector("#rbd-cancel").addEventListener("click", closeSheet);
+});
 
 boot();
