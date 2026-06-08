@@ -1265,10 +1265,14 @@ async function rotaBuilder() {
   // Person change — refresh grid to highlight their existing assignments
   $("#rb-person").addEventListener("change", () => refreshRotaGrid(roleSlots, times, State._rotaWeekStart));
 
-  // Cell toggle
+  // Cell toggle / admin removal
   mb.querySelectorAll(".rb-cell[data-sid]").forEach((cell) =>
     cell.addEventListener("click", () => {
-      if (cell.dataset.taken) return; // already assigned, can't re-take
+      if (cell.dataset.taken) {
+        const slot = roleSlots.find((s) => s.id === Number(cell.dataset.sid));
+        if (slot) showSlotRemoveSheet(slot);
+        return;
+      }
       cell.classList.toggle("rb-sel");
       updateRotaCount();
     }));
@@ -2082,6 +2086,35 @@ async function channelSheet(ch, allUsers) {
       renderChannelList();
     } catch (err) { toast(err.message, "err"); }
   });
+}
+
+function showSlotRemoveSheet(slot) {
+  const lvl = slot.level_name || "Pool duty (Lifeguard)";
+  const name = slot.assigned_name || "Unknown";
+  const dateStr = fmtDate(slot.date);
+  openSheet(`
+    <h2 style="margin-bottom:16px">Remove shift?</h2>
+    <div class="detail-rows">
+      <div class="detail-row"><span>Person</span><strong>${esc(name)}</strong></div>
+      <div class="detail-row"><span>Date</span><strong>${esc(dateStr)}</strong></div>
+      <div class="detail-row"><span>Time</span><strong>${slot.start_time}–${slot.end_time}</strong></div>
+      <div class="detail-row"><span>Role</span><strong>${esc(slot.role_name || "")}</strong></div>
+      <div class="detail-row"><span>Class</span><strong>${esc(lvl)}</strong></div>
+    </div>
+    <div style="margin-top:20px;display:flex;gap:10px">
+      <button class="btn danger" id="sr-confirm">Yes, remove</button>
+      <button class="btn ghost" id="sr-cancel">Cancel</button>
+    </div>`);
+  document.getElementById("sr-confirm").addEventListener("click", async (e) => {
+    e.target.disabled = true; e.target.textContent = "Removing…";
+    try {
+      await api(`/api/slots/${slot.id}/release`, { method: "POST" });
+      closeSheet();
+      toast(`${name.split(" ")[0]}'s shift removed`, "ok");
+      rotaBuilder();
+    } catch (err) { toast(err.message, "err"); e.target.disabled = false; e.target.textContent = "Yes, remove"; }
+  });
+  document.getElementById("sr-cancel").addEventListener("click", closeSheet);
 }
 
 // ------------------------------------------------------------------ sheets/modals

@@ -202,6 +202,10 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .sheet .grip { width:40px; height:5px; background: var(--line); border-radius:3px; margin: 8px auto 14px; }
 .sheet h2 { font-size:1.15rem; margin-bottom: 4px; }
 @media (min-width:560px){ .sheet-backdrop{ align-items:center; } .sheet{ border-radius:20px; } }
+.detail-rows { display:flex; flex-direction:column; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+.detail-row { display:flex; justify-content:space-between; align-items:center; padding:9px 14px; font-size:.88rem; border-bottom:1px solid var(--line); }
+.detail-row:last-child { border-bottom:none; }
+.detail-row span { color:var(--muted); }
 @keyframes slideup { from { transform: translateY(40px); opacity:.6 } to { transform:none; opacity:1 } }
 @keyframes fade { from { opacity:0 } to { opacity:1 } }
 
