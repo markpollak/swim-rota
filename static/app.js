@@ -720,7 +720,9 @@ function renderWeekGrid(allSlots) {
           const total = g.slots.length;
           const ok = approvedSlots.length >= total;
           const isPartial = !ok && approvedSlots.length > 0;
-          const mine = g.slots.some((s) => s.assigned_user_id === u.id);
+          const mineApproved   = g.slots.some((s) => s.assigned_user_id === u.id && s.status === "approved");
+          const mineRequested  = !mineApproved && g.slots.some((s) => s.assigned_user_id === u.id && s.status === "requested");
+          const mineClass = mineApproved ? " wg-mine" : mineRequested ? " wg-mine-requested" : "";
           const cls = ok ? "wg-pill-ok" : isPartial ? "wg-pill-partial" : "wg-pill-open";
           const names = approvedSlots.map((s) => s.assigned_name?.split(" ")[0]).filter(Boolean).join(", ");
           const openId = openSlots[0]?.id;
@@ -729,12 +731,14 @@ function renderWeekGrid(allSlots) {
             ? `data-pill-names="${esc(names)}" data-pill-desc="Pool duty 🛟"`
             : canReq ? `data-pill-open="${openId}" data-pill-desc="Pool duty 🛟"` : "";
           const icon = isPartial ? "⚡ " : "";
-          return `<div class="wg-pill ${cls}${mine ? " wg-mine" : ""}" ${dAttr}>🛟 ${icon}${approvedSlots.length}/${total}</div>`;
+          return `<div class="wg-pill ${cls}${mineClass}" ${dAttr}>🛟 ${icon}${approvedSlots.length}/${total}</div>`;
         }
         const assignedSlot = g.slots.find((s) => s.assigned_user_id && s.status === "approved");
         const pendingSlot  = g.slots.find((s) => s.status === "requested");
         const openSlot     = g.slots.find((s) => s.status === "open" && s.date >= today);
-        const mine = g.slots.some((s) => s.assigned_user_id === u.id);
+        const mineApproved  = g.slots.some((s) => s.assigned_user_id === u.id && s.status === "approved");
+        const mineRequested = !mineApproved && g.slots.some((s) => s.assigned_user_id === u.id && s.status === "requested");
+        const mineClass = mineApproved ? " wg-mine" : mineRequested ? " wg-mine-requested" : "";
         const cls  = assignedSlot ? "wg-pill-ok" : pendingSlot ? "wg-pill-pending" : "wg-pill-open";
         const shortName = (g.level_name || "").replace("Parents & Toddlers", "P&T").replace("Level ", "L");
         const who = assignedSlot ? ` · ${assignedSlot.assigned_name?.split(" ")[0]}` : pendingSlot ? " · ⏳" : "";
@@ -743,7 +747,7 @@ function renderWeekGrid(allSlots) {
         const dAttr = cls === "wg-pill-ok"
           ? `data-pill-names="${esc(names)}" data-pill-desc="${esc(shortName)}"`
           : (cls === "wg-pill-open" && canReq) ? `data-pill-open="${openSlot.id}" data-pill-desc="${esc(shortName)}"` : "";
-        return `<div class="wg-pill ${cls}${mine ? " wg-mine" : ""}" ${dAttr}>${esc(shortName)}${esc(who)}</div>`;
+        return `<div class="wg-pill ${cls}${mineClass}" ${dAttr}>${esc(shortName)}${esc(who)}</div>`;
       };
 
       let shownGroups = groupVals;
@@ -770,7 +774,7 @@ function renderWeekGrid(allSlots) {
       <span class="wg-legend wg-pill-partial">⚡ Part cover</span>
       <span class="wg-legend wg-pill-pending">Pending</span>
       <span class="wg-legend wg-pill-open">Open</span>
-      ${u.id ? `<span class="wg-legend wg-mine">Your shift</span>` : ""}
+      ${u.id ? `<span class="wg-legend wg-mine">Your shift</span><span class="wg-legend wg-mine-requested">Requested</span>` : ""}
     </div>
     <div class="wg-wrap">
       <table class="wg-table">

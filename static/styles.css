@@ -332,6 +332,7 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .wg-pill-more { background: transparent; color: var(--blue); font-weight: 700; padding: 1px 5px; border: none; cursor: pointer; font-size: inherit; }
 .wg-extra-pills { display: contents; }
 .wg-mine { outline: 2px solid var(--magenta); outline-offset: 1px; border-radius: 6px; }
+.wg-mine-requested { outline: 2px solid var(--red); outline-offset: 1px; border-radius: 6px; }
 .wg-hint { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; padding:0 2px; }
 .wg-legend { font-size: .72rem; font-weight: 700; padding: 3px 10px; border-radius: 6px; }
 
@@ -471,16 +472,16 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
   border:1.5px solid transparent; overflow:hidden;
 }
 .ms-row.ms-ok      { background:var(--green-soft);  border-color:#bce6cd; }
-.ms-row.ms-pending { background:var(--red-soft); border:1.5px dashed var(--red); }
+.ms-row.ms-pending { background:var(--amber-soft); border-color:#f0d49a; }
 .ms-row.ms-lg      { background:var(--red-soft); border-color:#f0bcbc; }
 .ms-t  { font-size:.57rem; font-weight:800; color:var(--ink); white-space:nowrap; flex-shrink:0; }
 .ms-lv { font-size:.68rem; font-weight:900; flex-shrink:0; }
 .ms-row.ms-ok      .ms-lv { color:var(--green); }
-.ms-row.ms-pending .ms-lv { color:var(--red); }
+.ms-row.ms-pending .ms-lv { color:var(--amber); }
 .ms-row.ms-lg      .ms-lv { color:var(--red); }
 .ms-st { font-size:.65rem; line-height:1; margin-left:auto; flex-shrink:0; }
 .ms-row.ms-ok      .ms-st { color:var(--green); }
-.ms-row.ms-pending .ms-st { color:var(--red); }
+.ms-row.ms-pending .ms-st { color:var(--amber); }
 .ms-row.ms-lg      .ms-st { color:var(--red); }
 
 /* red life-ring emoji = lifeguard duty */
