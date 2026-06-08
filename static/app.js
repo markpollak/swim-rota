@@ -43,8 +43,14 @@ async function api(path, { method = "GET", body } = {}) {
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401) {
-    logout(true);
-    throw new Error("Session expired — please sign in again.");
+    const data401 = await res.json().catch(() => ({}));
+    if (State.token) {
+      // We had a live session that got invalidated
+      logout(true);
+      throw new Error("Session expired — please sign in again.");
+    }
+    // No token — this is a login failure (wrong credentials etc.)
+    throw new Error(data401.detail || "Incorrect username or password.");
   }
   if (res.headers.get("content-type")?.includes("text/csv")) return res;
   const data = res.status === 204 ? {} : await res.json().catch(() => ({}));
