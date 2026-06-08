@@ -657,21 +657,37 @@ function renderWeekGrid(allSlots) {
       );
       const MAX_PILLS = 4;
       const renderGroupPill = (g) => {
+        const firstSlot = g.slots[0];
         if (g.isDuty) {
-          const approved = g.slots.filter((s) => s.status === "approved").length;
+          const approvedSlots = g.slots.filter((s) => s.status === "approved");
+          const openSlots    = g.slots.filter((s) => s.status === "open" && s.date >= today);
           const total = g.slots.length;
-          const ok = approved >= total;
+          const ok = approvedSlots.length >= total;
+          const isPartial = !ok && approvedSlots.length > 0;
           const mine = g.slots.some((s) => s.assigned_user_id === u.id);
-          const cls = ok ? "wg-pill-ok" : approved > 0 ? "wg-pill-partial" : "wg-pill-open";
-          return `<div class="wg-pill ${cls}${mine ? " wg-mine" : ""}">🛟 ${approved}/${total}</div>`;
+          const cls = ok ? "wg-pill-ok" : isPartial ? "wg-pill-partial" : "wg-pill-open";
+          const names = approvedSlots.map((s) => s.assigned_name?.split(" ")[0]).filter(Boolean).join(", ");
+          const openId = openSlots[0]?.id;
+          const canReq = openId && userHasRole(firstSlot.role_id);
+          const dAttr = (ok || isPartial)
+            ? `data-pill-names="${esc(names)}" data-pill-desc="Pool duty 🛟"`
+            : canReq ? `data-pill-open="${openId}" data-pill-desc="Pool duty 🛟"` : "";
+          const icon = isPartial ? "⚡ " : "";
+          return `<div class="wg-pill ${cls}${mine ? " wg-mine" : ""}" ${dAttr}>🛟 ${icon}${approvedSlots.length}/${total}</div>`;
         }
         const assignedSlot = g.slots.find((s) => s.assigned_user_id && s.status === "approved");
-        const pendingSlot = g.slots.find((s) => s.status === "requested");
+        const pendingSlot  = g.slots.find((s) => s.status === "requested");
+        const openSlot     = g.slots.find((s) => s.status === "open" && s.date >= today);
         const mine = g.slots.some((s) => s.assigned_user_id === u.id);
-        const cls = assignedSlot ? "wg-pill-ok" : pendingSlot ? "wg-pill-pending" : "wg-pill-open";
+        const cls  = assignedSlot ? "wg-pill-ok" : pendingSlot ? "wg-pill-pending" : "wg-pill-open";
         const shortName = (g.level_name || "").replace("Parents & Toddlers", "P&T").replace("Level ", "L");
         const who = assignedSlot ? ` · ${assignedSlot.assigned_name?.split(" ")[0]}` : pendingSlot ? " · ⏳" : "";
-        return `<div class="wg-pill ${cls}${mine ? " wg-mine" : ""}">${esc(shortName)}${esc(who)}</div>`;
+        const names = g.slots.filter((s) => s.status === "approved" && s.assigned_name).map((s) => s.assigned_name.split(" ")[0]).join(", ");
+        const canReq = openSlot && userHasRole(openSlot.role_id);
+        const dAttr = cls === "wg-pill-ok"
+          ? `data-pill-names="${esc(names)}" data-pill-desc="${esc(shortName)}"`
+          : (cls === "wg-pill-open" && canReq) ? `data-pill-open="${openSlot.id}" data-pill-desc="${esc(shortName)}"` : "";
+        return `<div class="wg-pill ${cls}${mine ? " wg-mine" : ""}" ${dAttr}>${esc(shortName)}${esc(who)}</div>`;
       };
 
       let shownGroups = groupVals;
@@ -695,7 +711,7 @@ function renderWeekGrid(allSlots) {
   body.innerHTML = `
     <div class="wg-hint">
       <span class="wg-legend wg-pill-ok">Covered</span>
-      <span class="wg-legend wg-pill-partial">Part cover</span>
+      <span class="wg-legend wg-pill-partial">⚡ Part cover</span>
       <span class="wg-legend wg-pill-pending">Pending</span>
       <span class="wg-legend wg-pill-open">Open</span>
       ${u.id ? `<span class="wg-legend wg-mine">Your shift</span>` : ""}
@@ -714,6 +730,22 @@ function renderWeekGrid(allSlots) {
       e.stopPropagation();
       btn.nextElementSibling.style.display = "";
       btn.remove();
+    }));
+
+  // open pill → request sheet
+  body.querySelectorAll(".wg-pill[data-pill-open]").forEach((pill) =>
+    pill.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const td = pill.closest("[data-date]");
+      showWeekRequestSheet(pill.dataset.pillOpen, pill.dataset.pillDesc, td?.dataset.date, td?.dataset.time);
+    }));
+
+  // covered/partial pill → names sheet
+  body.querySelectorAll(".wg-pill[data-pill-names]").forEach((pill) =>
+    pill.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const td = pill.closest("[data-date]");
+      showWeekNamesSheet(pill.dataset.pillNames, pill.dataset.pillDesc, td?.dataset.date, td?.dataset.time);
     }));
 
   // clicking a cell switches to day view for that date
@@ -2134,6 +2166,43 @@ async function channelSheet(ch, allUsers) {
       renderChannelList();
     } catch (err) { toast(err.message, "err"); }
   });
+}
+
+function showWeekRequestSheet(slotId, desc, date, time) {
+  const dateStr = date ? fmtDate(date) : "";
+  openSheet(`
+    <h2 style="margin-bottom:12px">Request this shift?</h2>
+    <div class="detail-rows">
+      <div class="detail-row"><span>Class</span><strong>${esc(desc || "")}</strong></div>
+      <div class="detail-row"><span>Date</span><strong>${esc(dateStr)}</strong></div>
+      <div class="detail-row"><span>Time</span><strong>${esc(time || "")}</strong></div>
+    </div>
+    <div style="margin-top:20px;display:flex;gap:10px">
+      <button class="btn green" id="wkr-confirm">Confirm request</button>
+      <button class="btn ghost" id="wkr-cancel">Cancel</button>
+    </div>`);
+  document.getElementById("wkr-confirm").addEventListener("click", async (e) => {
+    e.target.disabled = true; e.target.textContent = "Requesting…";
+    try {
+      await api(`/api/slots/${slotId}/request`, { method: "POST" });
+      closeSheet(); toast("Requested — awaiting approval", "ok");
+      await refreshNotif(); renderView();
+    } catch (err) { toast(err.message, "err"); e.target.disabled = false; e.target.textContent = "Confirm request"; }
+  });
+  document.getElementById("wkr-cancel").addEventListener("click", closeSheet);
+}
+
+function showWeekNamesSheet(names, desc, date, time) {
+  const dateStr = date ? fmtDate(date) : "";
+  const nameList = (names || "").split(", ").filter(Boolean);
+  openSheet(`
+    <h2 style="margin-bottom:4px">${esc(desc || "Shift")}</h2>
+    <p class="small muted" style="margin-bottom:14px">${esc(dateStr)}${time ? " · " + esc(time) : ""}</p>
+    <div class="detail-rows">
+      ${nameList.map((n) => `<div class="detail-row"><span>Staff</span><strong>${esc(n)}</strong></div>`).join("")}
+    </div>
+    <button class="btn ghost block" id="wkn-close" style="margin-top:20px">Close</button>`);
+  document.getElementById("wkn-close").addEventListener("click", closeSheet);
 }
 
 function showSlotRemoveSheet(slot) {

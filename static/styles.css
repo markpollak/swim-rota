@@ -326,7 +326,7 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .wg-empty { background: #fafafa; }
 .wg-pill { border-radius: 6px; padding: 3px 5px; margin-bottom: 2px; font-size: .67rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wg-pill-ok { background: var(--green-soft); color: var(--green); }
-.wg-pill-partial { background: var(--amber-soft); color: var(--amber); }
+.wg-pill-partial { background: var(--green-soft); color: var(--green); }
 .wg-pill-pending { background: var(--amber-soft); color: var(--amber); }
 .wg-pill-open { background: var(--blue-soft); color: var(--blue); }
 .wg-pill-more { background: transparent; color: var(--blue); font-weight: 700; padding: 1px 5px; border: none; cursor: pointer; font-size: inherit; }
