@@ -156,22 +156,37 @@ def run(force=False):
                 ok.append(u["id"])
             qualified[rid] = ok
 
+        # user_id -> list of (start_time, end_time) already assigned on each date
+        booked = {}  # (user_id, date) -> [(start, end), ...]
+
+        def seed_overlaps(uid, date, start, end):
+            for (s, e) in booked.get((uid, date), []):
+                if start < e and s < end:
+                    return True
+            return False
+
         slots = conn.execute("SELECT * FROM slots ORDER BY date, start_time").fetchall()
         for sl in slots:
             pool = qualified.get(sl["role_id"], [])
             if not pool:
                 continue
             roll = random.random()
-            uid = random.choice(pool)
+            # pick a user who doesn't already have a clashing shift
+            candidates = [u for u in pool if not seed_overlaps(u, sl["date"], sl["start_time"], sl["end_time"])]
+            if not candidates:
+                continue
+            uid = random.choice(candidates)
             if roll < 0.55:      # approved
                 conn.execute(
                     """UPDATE slots SET assigned_user_id=?, status='approved',
                             requested_at=?, decided_at=?, decided_by=? WHERE id=?""",
                     (uid, now, now, user_id["admin"], sl["id"]))
+                booked.setdefault((uid, sl["date"]), []).append((sl["start_time"], sl["end_time"]))
             elif roll < 0.72:    # pending approval (admin queue)
                 conn.execute(
                     "UPDATE slots SET assigned_user_id=?, status='requested', requested_at=? WHERE id=?",
                     (uid, now, sl["id"]))
+                booked.setdefault((uid, sl["date"]), []).append((sl["start_time"], sl["end_time"]))
             # else leave open
 
         # a couple of explicit pending requests + a notification for the demo

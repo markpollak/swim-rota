@@ -268,7 +268,8 @@ def approve_slot(slot_id: int, admin=Depends(require_admin)):
         s = _get_slot(conn, slot_id)
         if s["status"] != "requested" or not s["assigned_user_id"]:
             raise HTTPException(409, "Nothing to approve on that shift.")
-        check_qualified(conn, s["assigned_user_id"], s)  # re-validate training at approval
+        check_qualified(conn, s["assigned_user_id"], s)
+        check_double_book(conn, s["assigned_user_id"], s, exclude_id=slot_id)
         conn.execute("UPDATE slots SET status='approved', decided_at=?, decided_by=? WHERE id=?",
                      (now_iso(), admin["id"], slot_id))
         notify_user(conn, s["assigned_user_id"],
