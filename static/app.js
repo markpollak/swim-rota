@@ -1935,7 +1935,7 @@ async function manageLevels() {
         <div class="between"><strong>${esc(l.name)}</strong><span class="small muted">›</span></div>
         <div class="small muted">${esc(desc)}</div></div>`;
     }).join("")}`;
-  $("#addLevel").addEventListener("click", () => levelSheet(null, roles, {}));
+  // #addLevel handled by permanent delegated listener (see boot)
   mb.querySelectorAll("[data-level]").forEach((c) =>
     c.addEventListener("click", () => levelSheet(
       levels.find((l) => l.id == c.dataset.level), roles, staffing[c.dataset.level] || [])));
@@ -2006,7 +2006,7 @@ async function manageClasses() {
       <button class="btn block" id="genBtn">Extend to 6 months</button>
     </div>`;
 
-  $("#addLevel").addEventListener("click", () => levelSheet(null, roles, {}));
+  // #addLevel handled by permanent delegated listener (see boot)
   $("#dutySchedBtn").addEventListener("click", () =>
     classScheduleSheet(null, roles, schedByLevel["duty"] || []));
 
@@ -2891,7 +2891,7 @@ function levelSheet(l, roles, staffing) {
       if (isNew) { const r = await api("/api/levels", { method: "POST", body: { name } }); id = r.id; }
       else if (name !== l.name) await api(`/api/levels/${id}`, { method: "PATCH", body: { name } });
       await api(`/api/levels/${id}/staffing`, { method: "PUT", body: { items } });
-      closeSheet(); toast("Saved", "ok"); manageLevels();
+      closeSheet(); toast("Saved", "ok"); manageClasses();
     } catch (err) { toast(err.message, "err"); }
   });
 }
@@ -2975,6 +2975,12 @@ function refreshShiftViews() {
 }
 document.addEventListener("visibilitychange", refreshShiftViews);
 setInterval(refreshShiftViews, 3 * 60 * 1000);
+
+// Permanent delegated handler for the add-level button in Classes tab.
+document.addEventListener("click", (evt) => {
+  if (!evt.target.closest("#addLevel")) return;
+  levelSheet(null, State.roles || [], []);
+});
 
 // Permanent delegated handler for the delete-apply button.
 // Attached once here so it survives async rotaBuilder DOM rebuilds.
