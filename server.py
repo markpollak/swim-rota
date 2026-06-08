@@ -139,11 +139,30 @@ def bootstrap(user=Depends(current_user)):
             "SELECT * FROM roles WHERE active = 1 ORDER BY sort_order").fetchall())
         levels = db.dict_rows(conn.execute(
             "SELECT * FROM levels WHERE active = 1 ORDER BY sort_order").fetchall())
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+        settings = {r["key"]: r["value"] for r in rows}
         return {
             "user": user_payload(conn, user),
             "roles": roles, "levels": levels,
             "server_date": date.today().isoformat(),
+            "settings": settings,
         }
+
+
+@app.get("/api/settings")
+def get_settings(admin=Depends(require_admin)):
+    with db.get_db() as conn:
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+        return {r["key"]: r["value"] for r in rows}
+
+
+@app.patch("/api/settings")
+async def update_settings(request: Request, admin=Depends(require_admin)):
+    b = await request.json()
+    with db.get_db() as conn:
+        for key, value in b.items():
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (key, str(value)))
+        return {"ok": True}
 
 
 # ----------------------------------------------------------------------------

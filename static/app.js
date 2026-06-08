@@ -14,6 +14,7 @@ const State = {
   // calendar
   weekStart: null,
   selectedDate: null,
+  settings: { timezone: "Europe/London" },
   calendarFilter: null,      // null = my-roles default; role_id = that role; 'all' = everything
   calendarLevelFilter: null, // null = all; 'duty' = pool duty; number = level_id
   calendarView: "week",      // "day" | "week"
@@ -70,6 +71,20 @@ function mondayOf(d) { const x = new Date(d); const wd = (x.getDay() + 6) % 7; x
 function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
 function fmtDate(iso) { const d = parseISO(iso); return `${DOW[(d.getDay() + 6) % 7]} ${d.getDate()} ${MON[d.getMonth()]}`; }
 function fmtLong(iso) { const d = parseISO(iso); return `${DOW[(d.getDay() + 6) % 7]} ${d.getDate()} ${MON[d.getMonth()]} ${d.getFullYear()}`; }
+// Format a UTC ISO timestamp into the configured app timezone
+function fmtTs(isoUtc, opts = {}) {
+  if (!isoUtc) return "";
+  const tz = State.settings?.timezone || "Europe/London";
+  const d = new Date(isoUtc.includes("Z") || isoUtc.includes("+") ? isoUtc : isoUtc + "Z");
+  const defaults = { timeZone: tz, hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short", year: "numeric" };
+  return d.toLocaleString("en-GB", { ...defaults, ...opts });
+}
+function fmtTsTime(isoUtc) {
+  return fmtTs(isoUtc, { year: undefined, month: undefined, day: undefined });
+}
+function fmtTsDate(isoUtc) {
+  return fmtTs(isoUtc, { hour: undefined, minute: undefined });
+}
 
 let toastTimer;
 function toast(msg, kind = "") {
@@ -1351,7 +1366,7 @@ async function reportActivity(page = 0) {
     const html = rows.map((r) => {
       const color = ACTIVITY_CATEGORY_COLORS[r.category] || "var(--muted)";
       const label = ACTIVITY_LABELS[r.action] || r.action;
-      const ts = r.ts ? r.ts.replace("T", " ").slice(0, 16) : "";
+      const ts = r.ts ? fmtTs(r.ts) : "";
       return `<div class="list-item" style="align-items:flex-start;gap:10px">
         <div style="width:6px;height:6px;border-radius:50%;background:${color};margin-top:6px;flex-shrink:0"></div>
         <div style="flex:1;min-width:0">
@@ -1381,10 +1396,50 @@ async function reportActivity(page = 0) {
 }
 
 // ---- manage (users / roles / classes / rota / day view)
+const TZ_OPTIONS = [
+  { value: "Europe/London",    label: "UK — London (GMT/BST)" },
+  { value: "Europe/Dublin",    label: "Ireland — Dublin (GMT/IST)" },
+  { value: "Europe/Paris",     label: "Central Europe (CET/CEST)" },
+  { value: "Europe/Athens",    label: "Eastern Europe (EET/EEST)" },
+  { value: "America/New_York", label: "US Eastern (EST/EDT)" },
+  { value: "America/Chicago",  label: "US Central (CST/CDT)" },
+  { value: "America/Denver",   label: "US Mountain (MST/MDT)" },
+  { value: "America/Los_Angeles", label: "US Pacific (PST/PDT)" },
+  { value: "Australia/Sydney", label: "Australia — Sydney (AEST/AEDT)" },
+  { value: "UTC",              label: "UTC (no offset)" },
+];
+
+async function manageSettings() {
+  const mb = $("#manageBody");
+  const current = State.settings?.timezone || "Europe/London";
+  const tzOpts = TZ_OPTIONS.map((t) =>
+    `<option value="${t.value}" ${t.value === current ? "selected" : ""}>${esc(t.label)}</option>`).join("");
+
+  mb.innerHTML = `
+    <div class="card" style="margin-top:12px">
+      <h3 style="margin:0 0 14px">App settings</h3>
+      <div class="field">
+        <label>Timezone</label>
+        <select id="ms-tz">${tzOpts}</select>
+        <p class="small muted" style="margin-top:4px">All timestamps in messages, activity log, and notifications will display in this timezone.</p>
+      </div>
+      <button class="btn block" id="ms-save" style="margin-top:16px">Save settings</button>
+    </div>`;
+
+  $("#ms-save").addEventListener("click", async () => {
+    const tz = $("#ms-tz").value;
+    try {
+      await api("/api/settings", { method: "PATCH", body: { timezone: tz } });
+      State.settings = { ...State.settings, timezone: tz };
+      toast("Settings saved", "ok");
+    } catch (err) { toast(err.message, "err"); }
+  });
+}
+
 function adminManage() {
   const body = $("#adminBody");
-  const tabs = ["users","roles","classes"];
-  const labels = ["People","Roles","Classes"];
+  const tabs = ["users","roles","classes","settings"];
+  const labels = ["People","Roles","Classes","Settings"];
   if (!tabs.includes(State.manageTab)) State.manageTab = "users";
   body.innerHTML = `
     <div class="tabs" style="background:#fff;border:1px solid var(--line);flex-wrap:wrap">
@@ -1396,6 +1451,7 @@ function adminManage() {
   }));
   if (State.manageTab === "users") manageUsers();
   else if (State.manageTab === "roles") manageRoles();
+  else if (State.manageTab === "settings") manageSettings();
   else manageClasses();
 }
 
@@ -2271,8 +2327,7 @@ function appendBubble(msg) {
   const body = document.getElementById("chatBody");
   if (!body) return;
   const mine = msg.user_id === State.user?.id;
-  const time = new Date(msg.sent_at + (msg.sent_at.includes("Z") ? "" : "Z"))
-    .toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const time = fmtTsTime(msg.sent_at);
   const div = document.createElement("div");
   div.className = `bubble-wrap ${mine ? "mine" : "theirs"}`;
   div.dataset.mid = msg.id;
@@ -2609,7 +2664,7 @@ async function openNotifications() {
       ${n.rows?.length ? n.rows.map((r) => `
         <div class="card" style="margin:0;${r.read ? "" : "border-left:4px solid var(--magenta)"}">
           <div>${esc(r.message)}</div>
-          <div class="small muted" style="margin-top:4px">${new Date(r.created_at + "Z").toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</div>
+          <div class="small muted" style="margin-top:4px">${fmtTs(r.created_at)}</div>
         </div>`).join("") : `<div class="empty">No notifications.</div>`}
     </div>`);
   await api("/api/notifications/read-all", { method: "POST" });
@@ -2641,6 +2696,7 @@ async function boot() {
     State.roles = data.roles;
     State.levels = data.levels;
     State.serverDate = data.server_date;
+    if (data.settings) State.settings = { ...State.settings, ...data.settings };
     State.view = "home";
     renderShell();
     refreshNotif();

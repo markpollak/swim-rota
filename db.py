@@ -98,6 +98,11 @@ CREATE TABLE IF NOT EXISTS notifications (
     read        INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          TEXT NOT NULL,
@@ -204,6 +209,7 @@ def init_db():
             "ALTER TABLE channels ADD COLUMN role_id INTEGER",
             "ALTER TABLE channel_members ADD COLUMN via_role INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE audit ADD COLUMN category TEXT NOT NULL DEFAULT 'shifts'",
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('timezone', 'Europe/London')",
         ]:
             try:
                 conn.execute(stmt)
