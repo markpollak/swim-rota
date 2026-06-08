@@ -180,11 +180,6 @@ def check_qualified(conn, user_id, slot):
                        (user_id, slot["role_id"])).fetchone()
     if not has:
         raise HTTPException(403, f"You are not qualified as a {role['name']}.")
-    if role["requires_training"]:
-        u = conn.execute("SELECT training_expiry FROM users WHERE id = ?", (user_id,)).fetchone()
-        exp = u["training_expiry"]
-        if not exp or exp < slot["date"]:
-            raise HTTPException(403, "Lifeguard training is missing or expired for that date.")
 
 
 def notify_admins(conn, message, link="approvals"):
