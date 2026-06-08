@@ -81,17 +81,16 @@ ssh root@165.232.96.67 "cd swim-rota && docker compose ps"
 
 ---
 
-## ⚠ Service worker cache — MUST bump on every static change
+## ⚠ Service worker cache — bump on every static change
 
-The PWA caches `app.js` and `styles.css` aggressively. After editing any static file, bump the version in **three places** or changes won't load for existing users:
+The PWA caches `app.js` and `styles.css` aggressively. Static files are now
+**unversioned** (no `?v=` query strings) and cache-busting is driven by a single
+source of truth: after editing any static file, bump **`const CACHE = "arc-swim-vN"`**
+in `static/sw.js` (the `activate` handler clears the old shell). That's the only
+place to change — `index.html` and the `SHELL` list use plain paths, so versions
+can no longer drift out of sync.
 
-| File | What to change |
-|------|---------------|
-| `static/sw.js` | `const CACHE = "arc-swim-vN"` → increment N |
-| `static/sw.js` | `?v=N` on both SHELL entries |
-| `static/index.html` | `?v=N` on both `<link>` and `<script>` tags |
-
-Current version: **v21** — increment to v22 on next static change.
+Current version: **v48** — increment to v49 on next static change.
 
 ---
 

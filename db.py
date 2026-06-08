@@ -241,6 +241,7 @@ def init_db():
             "ALTER TABLE channels ADD COLUMN deleted_by INTEGER",
             "ALTER TABLE users ADD COLUMN deleted_at TEXT",
             "ALTER TABLE users ADD COLUMN deleted_by INTEGER",
+            "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
         ]:
             try:
                 conn.execute(stmt)

@@ -1,11 +1,14 @@
 /* Arc Swim Rota service worker.
  * App-shell cache so the PWA loads offline; API requests always hit the network
- * (never cached) so rota data is fresh. Bump CACHE to invalidate old shells. */
-const CACHE = "arc-swim-v47";
+ * (never cached) so rota data is fresh.
+ * Static files are now unversioned (no ?v= query strings) — bump CACHE on any
+ * static change and the activate handler clears the old shell. One source of
+ * truth, so versions can't drift out of sync. */
+const CACHE = "arc-swim-v48";
 const SHELL = [
   "/",
-  "/static/styles.css?v=33",
-  "/static/app.js?v=33",
+  "/static/styles.css",
+  "/static/app.js",
   "/manifest.webmanifest",
   "/static/icon-192.png",
   "/static/icon-512.png",

@@ -127,12 +127,20 @@ function renderLogin(errMsg) {
         </div>
         <button class="btn block" type="submit">Sign in</button>
       </form>
-      <div class="demo-creds">
+      <div id="demoCreds"></div>
+    </div>`;
+  // Demo credentials are hidden by default; only shown if the server has the
+  // 'demo_logins' flag on (off in production so creds aren't advertised).
+  fetch("/api/public-config").then((r) => r.json()).then((cfg) => {
+    if (cfg.demo_logins) {
+      const el = document.getElementById("demoCreds");
+      if (el) el.outerHTML = `<div class="demo-creds">
         <strong>Demo logins</strong><br/>
         Admin: <code>admin</code> / <code>admin123</code><br/>
         Staff: <code>emma</code>, <code>james</code>, <code>grace</code>… / <code>password</code>
-      </div>
-    </div>`;
+      </div>`;
+    }
+  }).catch(() => {});
   $("#loginForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const btn = $("#loginForm button");
@@ -2168,6 +2176,7 @@ async function viewProfile() {
   const needsTraining = u.roles.some((r) => r.requires_training);
   screen().innerHTML = `
     <h1 class="section-title">My profile</h1>
+    ${u.must_change_password ? `<div class="banner danger" style="margin-bottom:12px">🔒 For security, please set a new password below before continuing.</div>` : ""}
     <div class="card stack">
       <div class="field"><label>Full name</label><input id="pf-name" value="${esc(u.full_name)}"/></div>
       <div class="field"><label>Email</label><input id="pf-email" type="email" value="${esc(u.email || "")}"/></div>
@@ -2202,8 +2211,13 @@ async function viewProfile() {
   });
   $("#pf-passbtn").addEventListener("click", async () => {
     const pw = $("#pf-pass").value;
-    if (pw.length < 4) return toast("Password too short", "err");
-    try { await api("/api/me", { method: "PATCH", body: { password: pw } }); $("#pf-pass").value = ""; toast("Password updated", "ok"); }
+    if (pw.length < 8) return toast("Password must be at least 8 characters", "err");
+    try {
+      State.user = await api("/api/me", { method: "PATCH", body: { password: pw } });
+      $("#pf-pass").value = "";
+      toast("Password updated", "ok");
+      renderShell();  // refreshes State.user → clears any forced-change banner
+    }
     catch (err) { toast(err.message, "err"); }
   });
   $("#pf-logout").addEventListener("click", () => { if (confirm("Sign out?")) logout(); });
@@ -2789,8 +2803,10 @@ async function boot() {
     State.levels = data.levels;
     State.serverDate = data.server_date;
     if (data.settings) State.settings = { ...State.settings, ...data.settings };
-    State.view = "home";
+    // Force a password change before anything else if the account still uses a default.
+    State.view = State.user.must_change_password ? "profile" : "home";
     renderShell();
+    if (State.user.must_change_password) toast("Please set a new password to continue.", "err");
     refreshNotif();
     connectSSE();
   } catch (err) {

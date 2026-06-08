@@ -6,7 +6,10 @@ request/response bodies are plain JSON (no multipart dependency required).
 import os
 import io
 import csv
+import time
+import asyncio
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse, FileResponse, Response
@@ -20,6 +23,49 @@ HERE = os.path.dirname(__file__)
 STATIC = os.path.join(HERE, "static")
 
 app = FastAPI(title="Arc Swim Rota")
+
+# ----------------------------------------------------------------------------
+# timezone — "today" must be evaluated in the club's local time, not the
+# container's UTC, or shifts flip date/past-ness around midnight & through BST.
+# ----------------------------------------------------------------------------
+APP_TZ = "Europe/London"  # refreshed from settings at startup and on change
+
+
+def _load_tz():
+    global APP_TZ
+    try:
+        with db.get_db() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key='timezone'").fetchone()
+        if row and row["value"]:
+            ZoneInfo(row["value"])  # validate before adopting
+            APP_TZ = row["value"]
+    except Exception:
+        pass
+
+
+def today_local() -> date:
+    try:
+        return datetime.now(ZoneInfo(APP_TZ)).date()
+    except Exception:
+        return date.today()
+
+
+def today_iso() -> str:
+    return today_local().isoformat()
+
+
+def _valid_date(s) -> bool:
+    try:
+        date.fromisoformat(str(s)); return True
+    except Exception:
+        return False
+
+
+def _valid_time(s) -> bool:
+    try:
+        datetime.strptime(str(s), "%H:%M"); return True
+    except Exception:
+        return False
 
 
 def ensure_dm_channels(conn):
@@ -67,14 +113,70 @@ def ensure_system_channels(conn):
 @app.on_event("startup")
 def _startup():
     db.init_db()
+    _load_tz()
     with db.get_db() as conn:
         extend_to_horizon(conn)
         ensure_dm_channels(conn)
         ensure_system_channels(conn)
+        _flag_default_password_admins(conn)
+
+
+@app.on_event("startup")
+async def _startup_periodic():
+    """Keep the bookable horizon rolling forward without needing a restart."""
+    async def _loop():
+        while True:
+            await asyncio.sleep(24 * 3600)
+            try:
+                await asyncio.to_thread(_extend_horizon_job)
+            except Exception:
+                pass
+    asyncio.create_task(_loop())
+
+
+def _extend_horizon_job():
+    with db.get_db() as conn:
+        extend_to_horizon(conn)
+
+
+def _flag_default_password_admins(conn):
+    """Force a password change for any admin still using the seeded 'admin123'."""
+    for a in conn.execute(
+            "SELECT id, password_hash FROM users WHERE is_admin=1 AND active=1").fetchall():
+        if auth.verify_password("admin123", a["password_hash"]):
+            conn.execute("UPDATE users SET must_change_password=1 WHERE id=?", (a["id"],))
 
 
 def now_iso():
     return datetime.utcnow().isoformat(timespec="seconds")
+
+
+# ----------------------------------------------------------------------------
+# login rate limiting (in-memory, single worker — same constraint as SSE).
+# Throttles brute-force / credential-stuffing without a dependency.
+# ----------------------------------------------------------------------------
+_login_fails: dict = {}     # client_ip -> [unix timestamps of recent failures]
+LOGIN_MAX_FAILS = 10
+LOGIN_WINDOW = 300          # seconds (5 min)
+
+
+def _client_ip(request: Request) -> str:
+    # Behind Caddy the socket peer is the proxy; trust its X-Forwarded-For.
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "?"
+
+
+def _login_blocked(ip: str) -> bool:
+    now = time.time()
+    fails = [t for t in _login_fails.get(ip, []) if now - t < LOGIN_WINDOW]
+    _login_fails[ip] = fails
+    return len(fails) >= LOGIN_MAX_FAILS
+
+
+def _login_record_fail(ip: str):
+    _login_fails.setdefault(ip, []).append(time.time())
 
 
 # ----------------------------------------------------------------------------
@@ -107,7 +209,7 @@ def user_payload(conn, u):
            JOIN user_roles ur ON ur.role_id = r.id WHERE ur.user_id = ?
            ORDER BY r.sort_order""", (u["id"],)).fetchall()
     roles = db.dict_rows(roles)
-    today = date.today().isoformat()
+    today = today_iso()
     needs_training = any(r["requires_training"] for r in roles)
     expiry = u.get("training_expiry")
     training_status = "n/a"
@@ -116,7 +218,7 @@ def user_payload(conn, u):
             training_status = "missing"
         elif expiry < today:
             training_status = "expired"
-        elif expiry < (date.today() + timedelta(days=30)).isoformat():
+        elif expiry < (today_local() + timedelta(days=30)).isoformat():
             training_status = "expiring"
         else:
             training_status = "valid"
@@ -129,6 +231,7 @@ def user_payload(conn, u):
         "email": u["email"], "phone": u["phone"], "is_admin": bool(u["is_admin"]),
         "training_expiry": expiry, "training_status": training_status,
         "roles": roles, "deleted_at": u.get("deleted_at"), "deleted_by_name": deleted_by_name,
+        "must_change_password": bool(u.get("must_change_password")),
     }
 
 
@@ -137,6 +240,9 @@ def user_payload(conn, u):
 # ----------------------------------------------------------------------------
 @app.post("/api/login")
 async def login(request: Request):
+    ip = _client_ip(request)
+    if _login_blocked(ip):
+        raise HTTPException(429, "Too many failed attempts — please wait a few minutes and try again.")
     body = await request.json()
     username = (body.get("username") or "").strip().lower()
     password = body.get("password") or ""
@@ -144,7 +250,9 @@ async def login(request: Request):
         u = conn.execute("SELECT * FROM users WHERE lower(username) = ? AND active = 1",
                          (username,)).fetchone()
         if not u or not auth.verify_password(password, u["password_hash"]):
+            _login_record_fail(ip)
             raise HTTPException(401, "Incorrect username or password")
+        _login_fails.pop(ip, None)  # success clears the counter
         token = auth.make_token(u["id"])
         return {"token": token, "user": user_payload(conn, dict(u))}
 
@@ -161,9 +269,17 @@ def bootstrap(user=Depends(current_user)):
         return {
             "user": user_payload(conn, user),
             "roles": roles, "levels": levels,
-            "server_date": date.today().isoformat(),
+            "server_date": today_iso(),
             "settings": settings,
         }
+
+
+@app.get("/api/public-config")
+def public_config():
+    """Unauthenticated: only the handful of flags the login screen needs."""
+    with db.get_db() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key='demo_logins'").fetchone()
+    return {"demo_logins": bool(row and row["value"] == "1")}
 
 
 @app.get("/api/settings")
@@ -176,10 +292,17 @@ def get_settings(admin=Depends(require_admin)):
 @app.patch("/api/settings")
 async def update_settings(request: Request, admin=Depends(require_admin)):
     b = await request.json()
+    if "timezone" in b:  # validate before storing so we never adopt a bad zone
+        try:
+            ZoneInfo(str(b["timezone"]))
+        except Exception:
+            raise HTTPException(400, "Unknown timezone.")
     with db.get_db() as conn:
         for key, value in b.items():
             conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (key, str(value)))
-        return {"ok": True}
+    if "timezone" in b:
+        _load_tz()  # refresh the cached zone used by today_local()
+    return {"ok": True}
 
 
 # ----------------------------------------------------------------------------
@@ -285,7 +408,7 @@ def request_slot(slot_id: int, user=Depends(current_user)):
         s = _get_slot(conn, slot_id)
         if s["status"] != "open":
             raise HTTPException(409, "That shift is no longer available.")
-        if s["date"] < date.today().isoformat():
+        if s["date"] < today_iso():
             raise HTTPException(409, "You cannot request a shift in the past.")
         check_qualified(conn, user["id"], s)
         check_double_book(conn, user["id"], s)
@@ -317,7 +440,7 @@ async def release_slot(slot_id: int, request: Request, user=Depends(current_user
         s = dict(s)
         if s["assigned_user_id"] != user["id"] and not user["is_admin"]:
             raise HTTPException(403, "That isn't your shift.")
-        if s["date"] < date.today().isoformat():
+        if s["date"] < today_iso():
             raise HTTPException(409, "You cannot release a past shift.")
         uid = s["assigned_user_id"]
         conn.execute("""UPDATE slots SET assigned_user_id=NULL, status='open',
@@ -447,6 +570,12 @@ async def create_slot(request: Request, admin=Depends(require_admin)):
     required = ["date", "start_time", "end_time", "role_id"]
     if not all(b.get(k) for k in required):
         raise HTTPException(400, "date, start_time, end_time, role_id are required")
+    if not _valid_date(b["date"]):
+        raise HTTPException(400, "date must be YYYY-MM-DD.")
+    if not _valid_time(b["start_time"]) or not _valid_time(b["end_time"]):
+        raise HTTPException(400, "start_time and end_time must be HH:MM.")
+    if b["start_time"] >= b["end_time"]:
+        raise HTTPException(400, "end_time must be after start_time.")
     with db.get_db() as conn:
         lvl = conn.execute("SELECT name FROM levels WHERE id=?", (b.get("level_id"),)).fetchone()
         role = conn.execute("SELECT name FROM roles WHERE id=?", (b["role_id"],)).fetchone()
@@ -555,8 +684,9 @@ async def bulk_assign(request: Request, admin=Depends(require_admin)):
 @app.get("/api/slots/week")
 def slots_week(request: Request, user=Depends(current_user)):
     """Return all slots for the ISO week containing ?date=YYYY-MM-DD."""
-    from datetime import date as _date
-    d_str = request.query_params.get("date") or date.today().isoformat()
+    d_str = request.query_params.get("date") or today_iso()
+    if not _valid_date(d_str):
+        raise HTTPException(400, "date must be YYYY-MM-DD.")
     d = date.fromisoformat(d_str)
     monday = d - timedelta(days=d.weekday())
     sunday = monday + timedelta(days=6)
@@ -668,7 +798,12 @@ async def update_me(request: Request, user=Depends(current_user)):
             params.append(user["id"])
             conn.execute(f"UPDATE users SET {','.join(fields)} WHERE id=?", params)
         if b.get("password"):
-            conn.execute("UPDATE users SET password_hash=? WHERE id=?",
+            if len(b["password"]) < 8:
+                raise HTTPException(400, "Password must be at least 8 characters.")
+            if b["password"] == "admin123":
+                raise HTTPException(400, "Please choose a different password from the default.")
+            # Setting a new password also clears any forced-change flag.
+            conn.execute("UPDATE users SET password_hash=?, must_change_password=0 WHERE id=?",
                          (auth.hash_password(b["password"]), user["id"]))
         return user_payload(conn, dict(conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()))
 
@@ -809,7 +944,7 @@ def delete_template(tid: int, admin=Depends(require_admin)):
 async def generate(request: Request, admin=Depends(require_admin)):
     b = await request.json() if await _has_body(request) else {}
     weeks = int(b.get("weeks", 26))
-    start = monday_of(date.today())
+    start = monday_of(today_local())
     end = start + timedelta(weeks=weeks) - timedelta(days=1)
     with db.get_db() as conn:
         created = generate_slots(conn, start, end) + generate_from_schedules(conn, start, end)
@@ -847,7 +982,12 @@ async def set_level_schedule(level_ref: str, request: Request, admin=Depends(req
                           "role_id":2,"user_id":5,"count":1}, ...]}
     Sessions with identical (weekday, start_time, end_time) share one class_schedule row.
     """
-    level_id = None if level_ref == "duty" else int(level_ref)
+    if level_ref == "duty":
+        level_id = None
+    elif level_ref.isdigit():
+        level_id = int(level_ref)
+    else:
+        raise HTTPException(400, "level_ref must be a level id or 'duty'.")
     b = await request.json()
     sessions = b.get("sessions", [])
 
@@ -899,8 +1039,8 @@ def _outstanding_rows(conn, frm, to):
 @app.get("/api/reports/outstanding")
 def report_outstanding(request: Request, admin=Depends(require_admin)):
     q = request.query_params
-    frm = q.get("from") or date.today().isoformat()
-    to = q.get("to") or (date.today() + timedelta(weeks=4)).isoformat()
+    frm = q.get("from") or today_iso()
+    to = q.get("to") or (today_local() + timedelta(weeks=4)).isoformat()
     with db.get_db() as conn:
         rows = db.dict_rows(_outstanding_rows(conn, frm, to))
     return {"from": frm, "to": to, "count": len(rows), "rows": rows}
@@ -909,8 +1049,8 @@ def report_outstanding(request: Request, admin=Depends(require_admin)):
 @app.get("/api/reports/outstanding.csv")
 def report_outstanding_csv(request: Request, admin=Depends(require_admin)):
     q = request.query_params
-    frm = q.get("from") or date.today().isoformat()
-    to = q.get("to") or (date.today() + timedelta(weeks=4)).isoformat()
+    frm = q.get("from") or today_iso()
+    to = q.get("to") or (today_local() + timedelta(weeks=4)).isoformat()
     with db.get_db() as conn:
         rows = _outstanding_rows(conn, frm, to)
     buf = io.StringIO()
@@ -926,8 +1066,8 @@ def report_outstanding_csv(request: Request, admin=Depends(require_admin)):
 @app.get("/api/reports/coverage")
 def report_coverage(request: Request, admin=Depends(require_admin)):
     q = request.query_params
-    frm = q.get("from") or date.today().isoformat()
-    to = q.get("to") or (date.today() + timedelta(weeks=4)).isoformat()
+    frm = q.get("from") or today_iso()
+    to = q.get("to") or (today_local() + timedelta(weeks=4)).isoformat()
     with db.get_db() as conn:
         rows = conn.execute("""
             SELECT date,
@@ -942,8 +1082,8 @@ def report_coverage(request: Request, admin=Depends(require_admin)):
 
 @app.get("/api/reports/training")
 def report_training(admin=Depends(require_admin)):
-    today = date.today().isoformat()
-    soon = (date.today() + timedelta(days=30)).isoformat()
+    today = today_iso()
+    soon = (today_local() + timedelta(days=30)).isoformat()
     with db.get_db() as conn:
         rows = conn.execute("""
             SELECT DISTINCT u.id, u.full_name, u.training_expiry FROM users u
@@ -973,7 +1113,10 @@ def report_training(admin=Depends(require_admin)):
 @app.get("/api/activity")
 def get_activity(request: Request, admin=Depends(require_admin)):
     category = request.query_params.get("category") or None
-    page = max(0, int(request.query_params.get("page", 0)))
+    try:
+        page = max(0, int(request.query_params.get("page", 0)))
+    except (TypeError, ValueError):
+        page = 0
     limit = 50
     with db.get_db() as conn:
         if category:
@@ -1247,6 +1390,8 @@ def channel_members(cid: int, user=Depends(current_user)):
 @app.get("/api/channels/{cid}/messages")
 def get_messages(cid: int, request: Request, user=Depends(current_user)):
     before = request.query_params.get("before")  # message id for pagination
+    if before is not None and not str(before).isdigit():
+        raise HTTPException(400, "before must be a message id.")
     with db.get_db() as conn:
         # Check membership (admins can always read)
         if not user["is_admin"]:

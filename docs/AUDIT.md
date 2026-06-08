@@ -187,16 +187,16 @@ Several spots throw on malformed input and surface a 500:
 **Must-fix before staff depend on it**
 1. ✅ **C1** *(done)* — conditional `UPDATE … WHERE status=<expected>` + `rowcount` check on request/assign/approve/bulk-assign.
 2. ✅ **C2** *(done)* — check-and-write wrapped in `BEGIN IMMEDIATE` so double-book/qualification checks are race-safe.
-3. **C6** — force admin password change; remove/condition demo creds in production. *(still outstanding)*
+3. ✅ **C6** *(done)* — admins still on the default password are forced to change it on next login; the login screen's demo creds are now hidden unless a `demo_logins` flag is set (off in production).
 
 **Should-fix soon**
-4. **C4** — login rate-limiting.
-5. **D1** — timezone-correct "today" on the server.
-6. **D2** — input validation → 400s on the handful of endpoints that currently 500.
-7. **F1** — a minimal pytest suite, including concurrency tests for #1/#2.
+4. ✅ **C4** *(done)* — login rate-limiting (per-IP, 10 fails / 5 min → 429).
+5. ✅ **D1** *(done)* — timezone-correct "today" on the server (`today_local()` + `tzdata`).
+6. ✅ **D2** *(done)* — input validation → 400s on the endpoints that previously 500'd.
+7. ✅ **F1** *(done)* — pytest suite added (`tests/`, 7 tests incl. the concurrency tests for #1/#2).
 
 **Nice-to-have / future**
-8. **E2** rolling horizon job · **D4** sync SW cache versions (or drop them from `SHELL`) · **C3** real FKs · security headers at Caddy · **E1** Redis-backed SSE *if* you ever go multi-pool.
+8. ✅ **E2** *(done)* rolling-horizon background job · ✅ **D4** *(done)* SW versions dropped from `SHELL` (CACHE name is now the single source of truth) · ✅ security headers added at Caddy (HSTS, CSP, nosniff, frame-deny) · ⬜ **C3** real FKs (deferred — retrofitting needs full-table rebuilds on live data; low benefit given soft-delete-dominant schema) · ⬜ **E1** Redis-backed SSE *if* you ever go multi-pool.
 
 ---
 

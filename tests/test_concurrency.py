@@ -169,3 +169,89 @@ def test_concurrent_double_book_prevented():
             "SELECT COUNT(*) c FROM slots WHERE assigned_user_id=? AND status IN ('requested','approved')",
             (uid,)).fetchone()["c"]
     assert held == 1, f"user ended up with {held} overlapping shifts"
+
+
+# ===================================================================== hardening
+def _api(method, path, token=None, body=None, headers=None):
+    data = json.dumps(body).encode() if body is not None else None
+    h = {"Content-Type": "application/json"}
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(BASE + path, data=data, method=method, headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status, json.loads(r.read() or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or "{}")
+        except Exception:
+            return e.code, {}
+
+
+def _make_admin(username="boss", pw="admin123"):
+    with db.get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO users (username, password_hash, full_name, is_admin, created_at) "
+            "VALUES (?,?,?,1,?)",
+            (username, auth.hash_password(pw), "The Boss", "2026-01-01T00:00:00"))
+        return cur.lastrowid
+
+
+def test_login_rate_limited_after_repeated_failures():
+    """10 wrong passwords from one IP → the next attempt is 429, not 401."""
+    _seed_base()
+    _make_admin("boss", "rightpass1")
+    ip = "203.0.113.55"  # unique bucket via X-Forwarded-For
+    codes = [_api("POST", "/api/login", body={"username": "boss", "password": "nope"},
+                  headers={"X-Forwarded-For": ip})[0] for _ in range(10)]
+    assert codes == [401] * 10, codes
+    blocked, _ = _api("POST", "/api/login", body={"username": "boss", "password": "nope"},
+                      headers={"X-Forwarded-For": ip})
+    assert blocked == 429
+    # A different IP is unaffected.
+    other, _ = _api("POST", "/api/login", body={"username": "boss", "password": "nope"},
+                    headers={"X-Forwarded-For": "198.51.100.9"})
+    assert other == 401
+
+
+def test_bad_input_returns_400_not_500():
+    role = _seed_base()
+    admin = _make_admin("boss2", "rightpass1")
+    tok = auth.make_token(admin)
+    # create_slot with a malformed date
+    s1, _ = _api("POST", "/api/slots", tok, {"date": "not-a-date", "start_time": "10:00",
+                                             "end_time": "10:30", "role_id": role})
+    assert s1 == 400
+    # end before start
+    s2, _ = _api("POST", "/api/slots", tok, {"date": FUTURE, "start_time": "11:00",
+                                             "end_time": "10:00", "role_id": role})
+    assert s2 == 400
+    # slots/week with a garbage date
+    s3, _ = _api("GET", "/api/slots/week?date=garbage", tok)
+    assert s3 == 400
+
+
+def test_forced_password_change_flow():
+    """Default-password admin is flagged; changing it clears the flag; defaults rejected."""
+    import server
+    _seed_base()
+    uid = _make_admin("boss3", "admin123")
+    with db.get_db() as conn:
+        server._flag_default_password_admins(conn)  # startup runs this; trigger it here
+    tok = auth.make_token(uid)
+    _, me = _api("GET", "/api/me", tok)
+    assert me["must_change_password"] is True
+    # too-short and default-reuse are rejected
+    assert _api("PATCH", "/api/me", tok, {"password": "short"})[0] == 400
+    assert _api("PATCH", "/api/me", tok, {"password": "admin123"})[0] == 400
+    # a real change succeeds and clears the flag
+    code, updated = _api("PATCH", "/api/me", tok, {"password": "a-better-secret"})
+    assert code == 200 and updated["must_change_password"] is False
+
+
+def test_public_config_hides_demo_logins_by_default():
+    _seed_base()
+    code, cfg = _api("GET", "/api/public-config")
+    assert code == 200 and cfg["demo_logins"] is False
