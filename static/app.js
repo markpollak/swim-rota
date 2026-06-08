@@ -876,12 +876,14 @@ async function adminApprovals() {
 
   if (State._appRoleFilter === undefined) State._appRoleFilter = null;
   if (State._appLevelFilter === undefined) State._appLevelFilter = null;
+  if (State._appPersonFilter === undefined) State._appPersonFilter = null;
 
   function filtered() {
     let s = pending;
     if (State._appRoleFilter) s = s.filter((x) => x.role_id === State._appRoleFilter);
     if (State._appLevelFilter === "duty") s = s.filter((x) => !x.level_id);
     else if (State._appLevelFilter) s = s.filter((x) => x.level_id === State._appLevelFilter);
+    if (State._appPersonFilter) s = s.filter((x) => x.assigned_user_id === State._appPersonFilter);
     return s.slice().sort((a, b) => (a.date + a.start_time).localeCompare(b.date + b.start_time));
   }
 
@@ -943,6 +945,9 @@ async function adminApprovals() {
     }));
   }
 
+  const peopleInPending = [...new Map(pending.map((s) => [s.assigned_user_id, { id: s.assigned_user_id, name: s.assigned_name }])).values()]
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+
   const roleChips = [
     `<button class="filterchip${!State._appRoleFilter ? " active" : ""}" data-arole="">All roles</button>`,
     ...rolesInPending.map((r) => `<button class="filterchip${State._appRoleFilter === r.id ? " active" : ""}" data-arole="${r.id}"
@@ -955,8 +960,14 @@ async function adminApprovals() {
     ...levelsInPending.map((l) => `<button class="filterchip${State._appLevelFilter === l.id ? " active" : ""}" data-alevel="${l.id}">${esc(l.name.replace("Parents & Toddlers", "P&T").replace("Level ", "L"))}</button>`),
   ].join("");
 
+  const personChips = [
+    `<button class="filterchip${!State._appPersonFilter ? " active" : ""}" data-aperson="">Everyone</button>`,
+    ...peopleInPending.map((p) => `<button class="filterchip${State._appPersonFilter === p.id ? " active" : ""}" data-aperson="${p.id}">${esc((p.name || "").split(" ")[0])}</button>`),
+  ].join("");
+
   body.innerHTML = `
     <div style="margin-bottom:6px">
+      <div class="filterbar" style="flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px">${personChips}</div>
       <div class="filterbar" style="flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px">${roleChips}</div>
       <div class="filterbar" style="flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px">${levelChips}</div>
     </div>
@@ -986,6 +997,13 @@ async function adminApprovals() {
     State._appLevelFilter = v === "" ? null : v === "duty" ? "duty" : Number(v);
     body.querySelectorAll("[data-alevel]").forEach((x) =>
       x.classList.toggle("active", x.dataset.alevel === (State._appLevelFilter === null ? "" : String(State._appLevelFilter))));
+    renderRows();
+  }));
+
+  body.querySelectorAll("[data-aperson]").forEach((b) => b.addEventListener("click", () => {
+    State._appPersonFilter = b.dataset.aperson ? Number(b.dataset.aperson) : null;
+    body.querySelectorAll("[data-aperson]").forEach((x) =>
+      x.classList.toggle("active", x.dataset.aperson === (State._appPersonFilter === null ? "" : String(State._appPersonFilter))));
     renderRows();
   }));
 
