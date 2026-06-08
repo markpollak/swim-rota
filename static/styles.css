@@ -302,7 +302,7 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
   padding:6px 14px; font-weight:700; font-size:.8rem; color:var(--muted); cursor:pointer;
   transition: background .12s, color .12s, border-color .12s;
 }
-.filterchip.active { color:#fff !important; }
+.filterchip.active { background:var(--blue); border-color:var(--blue); color:#fff !important; }
 
 /* ---------- week timetable grid ---------- */
 .wg-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 10px; border: 1px solid var(--line); }

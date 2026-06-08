@@ -833,22 +833,29 @@ async function viewMyShifts() {
 
 // ------------------------------------------------------------------ ADMIN
 function viewAdmin() {
+  if (!State.adminTab) State.adminTab = "approvals";
   screen().innerHTML = `
     <h1 class="section-title" style="margin-top:14px">Admin</h1>
     <div class="tabs">
-      <button data-atab="approvals" class="active">Approvals</button>
-      <button data-atab="reports">Reports</button>
-      <button data-atab="manage">Manage</button>
+      <button data-atab="approvals" class="${State.adminTab==="approvals"?"active":""}">Approvals</button>
+      <button data-atab="reports" class="${State.adminTab==="reports"?"active":""}">Reports</button>
+      <button data-atab="manage" class="${State.adminTab==="manage"?"active":""}">Manage</button>
+      <button data-atab="rota" class="${State.adminTab==="rota"?"active":""}">Rota</button>
     </div>
     <div id="adminBody"></div>`;
   const tabs = screen().querySelectorAll("[data-atab]");
   tabs.forEach((b) => b.addEventListener("click", () => {
+    State.adminTab = b.dataset.atab;
     tabs.forEach((x) => x.classList.toggle("active", x === b));
     if (b.dataset.atab === "approvals") adminApprovals();
     else if (b.dataset.atab === "reports") adminReports();
-    else adminManage();
+    else if (b.dataset.atab === "manage") adminManage();
+    else adminRotaView();
   }));
-  adminApprovals();
+  if (State.adminTab === "approvals") adminApprovals();
+  else if (State.adminTab === "reports") adminReports();
+  else if (State.adminTab === "manage") adminManage();
+  else adminRotaView();
 }
 
 async function adminApprovals() {
@@ -1137,9 +1144,8 @@ async function reportTraining() {
 // ---- manage (users / roles / classes / rota / day view)
 function adminManage() {
   const body = $("#adminBody");
-  const tabs = ["users","roles","classes","rota","dayview"];
-  const labels = ["People","Roles","Classes","Rota","Day View"];
-  // default "classes" tab if coming from a removed tab
+  const tabs = ["users","roles","classes"];
+  const labels = ["People","Roles","Classes"];
   if (!tabs.includes(State.manageTab)) State.manageTab = "users";
   body.innerHTML = `
     <div class="tabs" style="background:#fff;border:1px solid var(--line);flex-wrap:wrap">
@@ -1151,8 +1157,22 @@ function adminManage() {
   }));
   if (State.manageTab === "users") manageUsers();
   else if (State.manageTab === "roles") manageRoles();
-  else if (State.manageTab === "classes") manageClasses();
-  else if (State.manageTab === "rota") rotaBuilder();
+  else manageClasses();
+}
+
+function adminRotaView() {
+  if (!State.rotaSubTab) State.rotaSubTab = "builder";
+  const body = $("#adminBody");
+  body.innerHTML = `
+    <div class="tabs" style="background:#fff;border:1px solid var(--line)">
+      <button data-rstab="builder" class="${State.rotaSubTab==="builder"?"active":""}">Rota</button>
+      <button data-rstab="dayview" class="${State.rotaSubTab==="dayview"?"active":""}">Day View</button>
+    </div>
+    <div id="manageBody"><div class="spinner"></div></div>`;
+  body.querySelectorAll("[data-rstab]").forEach((b) => b.addEventListener("click", () => {
+    State.rotaSubTab = b.dataset.rstab; adminRotaView();
+  }));
+  if (State.rotaSubTab === "builder") rotaBuilder();
   else adminDayView();
 }
 
