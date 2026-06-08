@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Building a Swim-Club Rota App in Four Days with Claude Code</title>
+<meta name="description" content="How a deployable, installable staff-scheduling PWA for a leisure-centre pool came together in four days of pair-programming with Claude Code." />
+<style>
+  :root{
+    --blue:#26358B; --blue-deep:#1b2767; --magenta:#A4358B; --teal:#0E9F8E;
+    --ink:#1a1d29; --muted:#5b6172; --line:#e7e9f0; --bg:#f6f7fb; --card:#fff;
+    --amber:#c77700; --green:#1f9d57; --red:#d8345f;
+    --maxw:780px;
+    --shadow:0 10px 30px rgba(20,28,60,.08);
+    --shadow-sm:0 4px 14px rgba(20,28,60,.07);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:17px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:var(--maxw); margin:0 auto; padding:0 22px}
+
+  /* ---- hero ---- */
+  header.hero{
+    background:linear-gradient(135deg,var(--blue) 0%,var(--blue-deep) 55%,var(--magenta) 130%);
+    color:#fff; padding:74px 0 64px; position:relative; overflow:hidden;
+  }
+  header.hero::after{
+    content:""; position:absolute; inset:auto 0 -1px 0; height:60px;
+    background:radial-gradient(120% 60px at 50% 100%, rgba(255,255,255,.14), transparent 70%);
+  }
+  .hero .wrap{position:relative; z-index:1}
+  .eyebrow{
+    display:inline-block; letter-spacing:.14em; text-transform:uppercase;
+    font-size:12.5px; font-weight:700; opacity:.85; margin-bottom:18px;
+    border:1px solid rgba(255,255,255,.35); padding:5px 12px; border-radius:999px;
+  }
+  h1{font-size:clamp(30px,5.4vw,46px); line-height:1.12; margin:.1em 0 .35em; font-weight:800; letter-spacing:-.02em}
+  .hero p.lede{font-size:19px; opacity:.92; max-width:60ch; margin:0}
+  .meta{margin-top:26px; font-size:14px; opacity:.8; display:flex; gap:18px; flex-wrap:wrap}
+  .meta span{display:inline-flex; align-items:center; gap:7px}
+
+  /* ---- stat strip ---- */
+  .stats{
+    display:grid; grid-template-columns:repeat(4,1fr); gap:14px;
+    margin:-38px auto 8px; position:relative; z-index:2;
+  }
+  .stat{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px 16px; text-align:center; box-shadow:var(--shadow-sm)}
+  .stat b{display:block; font-size:26px; font-weight:800; color:var(--blue); letter-spacing:-.02em}
+  .stat span{font-size:12.5px; color:var(--muted)}
+  @media(max-width:620px){ .stats{grid-template-columns:repeat(2,1fr)} }
+
+  /* ---- article ---- */
+  article{padding:40px 0 10px}
+  article h2{
+    font-size:27px; line-height:1.2; margin:48px 0 6px; font-weight:800; letter-spacing:-.02em;
+    padding-top:10px;
+  }
+  article h2 .num{color:var(--magenta); font-size:15px; font-weight:700; display:block; letter-spacing:.08em; text-transform:uppercase; margin-bottom:2px}
+  article h3{font-size:19px; margin:30px 0 4px; font-weight:700}
+  article p{margin:14px 0; color:#23283a}
+  article strong{color:var(--ink)}
+  a{color:var(--blue); text-decoration:none; border-bottom:1px solid rgba(38,53,139,.3)}
+  hr.div{border:none; border-top:1px solid var(--line); margin:42px 0}
+  code{background:#eef0f7; padding:2px 7px; border-radius:6px; font-size:.86em; font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace; color:var(--blue-deep)}
+
+  ul.clean{margin:14px 0; padding:0; list-style:none}
+  ul.clean li{position:relative; padding:7px 0 7px 30px; border-bottom:1px dashed var(--line)}
+  ul.clean li:last-child{border-bottom:none}
+  ul.clean li::before{content:"›"; position:absolute; left:6px; top:7px; color:var(--magenta); font-weight:800}
+
+  /* ---- figures ---- */
+  figure{margin:26px 0; text-align:center}
+  figure img{
+    max-width:300px; width:100%; border-radius:22px; border:1px solid var(--line);
+    box-shadow:var(--shadow); background:#fff;
+  }
+  figure figcaption{margin-top:12px; font-size:13.5px; color:var(--muted); max-width:46ch; margin-inline:auto}
+  .shotgrid{display:grid; grid-template-columns:1fr 1fr; gap:26px 22px; margin:28px 0}
+  .shotgrid figure{margin:0}
+  .shotgrid img{max-width:100%}
+  @media(max-width:560px){ .shotgrid{grid-template-columns:1fr} }
+
+  /* ---- pull quote ---- */
+  blockquote{
+    margin:34px 0; padding:22px 26px; border-left:4px solid var(--magenta);
+    background:linear-gradient(180deg,#fff,#fbfaff); border-radius:0 14px 14px 0;
+    font-size:21px; line-height:1.45; font-weight:600; color:var(--blue-deep); box-shadow:var(--shadow-sm);
+  }
+
+  /* ---- callout ---- */
+  .callout{
+    margin:30px 0; padding:22px 24px; border-radius:16px; border:1px solid var(--line);
+    background:var(--card); box-shadow:var(--shadow-sm);
+  }
+  .callout.fix{border-left:5px solid var(--green)}
+  .callout h3{margin:0 0 8px; display:flex; align-items:center; gap:9px}
+  .callout .tag{font-size:12px; font-weight:700; color:#fff; background:var(--green); padding:3px 10px; border-radius:999px; letter-spacing:.03em}
+  .callout p{margin:8px 0}
+
+  /* ---- verdict cards ---- */
+  .verdict{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:24px 0}
+  .vc{border:1px solid var(--line); border-radius:14px; padding:18px; background:var(--card); box-shadow:var(--shadow-sm)}
+  .vc h4{margin:0 0 8px; font-size:15px; letter-spacing:.03em; text-transform:uppercase}
+  .vc.good h4{color:var(--green)} .vc.todo h4{color:var(--amber)}
+  .vc ul{margin:0; padding-left:18px} .vc li{margin:5px 0; font-size:15px}
+  @media(max-width:560px){ .verdict{grid-template-columns:1fr} }
+
+  footer{margin-top:50px; background:var(--blue-deep); color:#cfd4ee; padding:34px 0 44px; font-size:14.5px}
+  footer .wrap{display:flex; gap:14px; align-items:center; flex-wrap:wrap; justify-content:space-between}
+  footer .badge{display:inline-flex; align-items:center; gap:8px; font-weight:600; color:#fff}
+  .wave{width:26px;height:26px;flex:0 0 26px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow">Build notes · Claude Code</span>
+    <h1>Building a swim-club rota app in four days with Claude&nbsp;Code</h1>
+    <p class="lede">From an empty folder to a deployed, installable staff-scheduling app for a leisure-centre pool — pair-programmed end to end.</p>
+    <div class="meta">
+      <span>🗓️ 4–8 June 2026</span>
+      <span>⏱️ ~10 min read</span>
+      <span>🧰 FastAPI · SQLite · vanilla JS PWA</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="stats">
+    <div class="stat"><b>4</b><span>days, start to deployed</span></div>
+    <div class="stat"><b>~50</b><span>commits</span></div>
+    <div class="stat"><b>5,300</b><span>lines of code</span></div>
+    <div class="stat"><b>0</b><span>build steps</span></div>
+  </div>
+</div>
+
+<div class="wrap">
+<article>
+
+  <p>Every leisure centre runs on a rota, and almost every rota runs on a tired spreadsheet and a long email chain. The pool at <strong>The Arc, Matlock</strong> is no different: swim teachers and lifeguards need slotting into half-hour poolside sessions, lifeguards must hold in-date training, and somebody has to approve it all and chase the gaps.</p>
+
+  <p>I wanted to see how far I could get building a proper replacement — not a prototype, a <em>deployable</em> app — with <strong>Claude Code</strong> as my pair programmer. Four days later, <strong>Arc Swim Rota</strong> is a mobile-first Progressive Web App that staff install on their phones, request shifts from, and message each other in, and that admins run the whole rota from.</p>
+
+  <figure>
+    <img src="img/01-login.png" alt="Arc Swim Rota login screen" />
+    <figcaption>The branded, installable login screen — deep blue and magenta, straight from Freedom Leisure’s palette.</figcaption>
+  </figure>
+
+  <hr class="div" />
+
+  <h2><span class="num">01</span>The brief</h2>
+  <p>The requirements were unglamorous and very real:</p>
+  <ul class="clean">
+    <li><strong>Two kinds of staff</strong> — teachers and lifeguards (plus assistant teachers), each with different qualifications.</li>
+    <li><strong>Half-hour shifts</strong> across a pool open from early morning to late evening, with constant lifeguard cover and different classes each evening.</li>
+    <li><strong>Self-service:</strong> staff request the slots they want; an admin approves.</li>
+    <li><strong>Training rules:</strong> a lifeguard whose qualification has expired is automatically blocked from lifeguard shifts.</li>
+    <li><strong>It has to live on a phone.</strong> Poolside staff won’t log into a desktop portal.</li>
+  </ul>
+  <p>That last point pushed the whole design towards a <strong>mobile-first PWA</strong>: installable to a home screen, works offline, feels like a native app.</p>
+
+  <h2><span class="num">02</span>The stack — deliberately boring</h2>
+  <p>I asked Claude Code to keep the technology minimal, and it held that line throughout:</p>
+  <ul class="clean">
+    <li><strong>Backend:</strong> FastAPI + <strong>SQLite</strong>, with authentication written against the Python standard library only (PBKDF2 hashing, HMAC-signed tokens).</li>
+    <li><strong>Frontend:</strong> <strong>vanilla JavaScript</strong> — a single-page app with no build step, no bundler, no framework.</li>
+    <li><strong>Delivery:</strong> Docker + <strong>Caddy</strong> (automatic HTTPS), deployable to a small cloud server with one command.</li>
+  </ul>
+  <p>The whole app is around 5,300 lines. No <code>node_modules</code>, nothing to compile. You can read it end to end in an afternoon — which, for a tool one person will maintain, is exactly the point. Claude Code is genuinely good at resisting the urge to reach for a framework when plain code will do, <em>if you tell it to</em>.</p>
+
+  <h2><span class="num">03</span>What the workflow actually felt like</h2>
+  <p><strong>A <code>CLAUDE.md</code> as the project’s memory.</strong> Early on I had Claude Code write a project guide — how to run and deploy it, the data model, the conventions, the gotchas. Every later session started by reading that file, so I never re-explained the architecture.</p>
+  <p><strong>Tight, iterative loops.</strong> Most commits are small and specific — “show inline clash warning in approvals”, “part-cover amber, Week tab first”. I’d describe a behaviour or a tweak; Claude Code changed it across the backend and the 2,700-line frontend in one pass; I checked it in the browser. The commit log reads like a conversation.</p>
+  <p><strong>Deploy as a habit.</strong> Push, and it redeploys to the live server. “Make a change, see it live” was a 30-second loop — which completely changes how willing you are to polish.</p>
+
+  <h2><span class="num">04</span>The build, day by day</h2>
+  <h3>Day 1 — Scaffold</h3>
+  <p>The whole skeleton: the SQLite schema, stdlib auth, the engine that materialises bookable half-hour shifts from recurring weekly templates, a realistic data seeder, and the PWA shell. By the end of day one there was a working login and a calendar.</p>
+  <h3>Day 2 — Classes &amp; conversation</h3>
+  <p>A proper class-schedule system (each swimming level gets its own weekly schedule and default staffing), and — the day’s surprise — a full team-messaging system with channels, direct messages, unread badges, all delivered in real time.</p>
+  <h3>Day 3 — The admin side grows up</h3>
+  <p>A compact approvals queue, the first reports, a day view, and a redesigned “My Shifts” as a tight week grid of status chips.</p>
+  <h3>Day 4 — The polish marathon</h3>
+  <p>More than half the commits land on a single day: the interactive coverage timetable, the bulk rota builder, inline clash warnings, training-expiry enforcement, role shortcodes, an activity log, a configurable timezone, and a locked “All Staff” channel. This is where it went from functional to polished.</p>
+
+  <h2><span class="num">05</span>A tour of where it landed</h2>
+  <p>When a teacher or lifeguard opens the app they get a personal dashboard: this week’s shifts at a glance, a count of what’s coming up versus what’s still open to grab, and — if relevant — a nudge that their training is about to expire.</p>
+
+  <div class="shotgrid">
+    <figure><img src="img/09-home-staff.png" alt="Staff home dashboard"/><figcaption>The staff dashboard, with a training-expiry nudge.</figcaption></figure>
+    <figure><img src="img/10-shifts-week.png" alt="Week timetable with coverage counts"/><figcaption>The heart of the app: a colour-coded coverage timetable with role &amp; class filters.</figcaption></figure>
+  </div>
+
+  <p>Self-service only works if people aren’t tripping over each other, so the timetable is honest about contention: tap a slot someone has already requested and it tells you exactly who’s waiting on it.</p>
+
+  <figure><img src="img/13-pending-requester.png" alt="Pending-requester modal"/><figcaption>Tap a contested slot and the app names who’s already requested it.</figcaption></figure>
+
+  <p>Admins get a four-tab control centre — approvals, reports, staff management, and the rota builder.</p>
+
+  <div class="shotgrid">
+    <figure><img src="img/03-approvals.png" alt="Admin approvals queue"/><figcaption>Approvals: one-tap approve/decline, clash detection, per-person filters.</figcaption></figure>
+    <figure><img src="img/06-rota-builder.png" alt="Bulk rota builder"/><figcaption>The rota builder: tick slots for a person and bulk-assign, with a clear skip report.</figcaption></figure>
+    <figure><img src="img/04-reports-coverage.png" alt="Coverage report"/><figcaption>Daily coverage, so under-staffed days jump out.</figcaption></figure>
+    <figure><img src="img/05-reports-training.png" alt="Training-status report"/><figcaption>Training status — valid, expiring, expired — and the rule that blocks expired lifeguards.</figcaption></figure>
+    <figure><img src="img/08-chat.png" alt="Team messaging"/><figcaption>Real-time team messaging, built in a single day.</figcaption></figure>
+    <figure><img src="img/12-profile.png" alt="Staff profile"/><figcaption>Each staff member records their own training expiry.</figcaption></figure>
+  </div>
+
+  <h2><span class="num">06</span>Where Claude Code shone — and where I steered</h2>
+  <p><strong>It shone at breadth.</strong> A single instruction could touch the data layer, an API endpoint and several render functions at once and come back coherent. Holding a 2,700-line vanilla-JS SPA <em>and</em> a FastAPI backend in view at the same time is exactly the context-juggling that’s tedious for a human and natural for the model.</p>
+  <p><strong>It shone at the unglamorous 80%.</strong> Docker, the Caddy config, the deploy script, the seeder, the service worker, the docs — all the scaffolding that makes something <em>deployable</em> rather than just <em>runnable</em>.</p>
+  <p><strong>I steered on judgement calls.</strong> The colour language of the timetable took several rounds — what “part cover” should look like, solid vs dashed outlines, which tab comes first. Those are taste, and the right move was lots of small iterations.</p>
+
+  <blockquote>“It works when I click it” and “it’s correct when fifty people use it at once” are different bars — and the model won’t reach the second one unless you ask it to.</blockquote>
+
+  <h2><span class="num">07</span>Making it production-ready</h2>
+  <p>Once it worked, I had the whole thing audited. The most important finding was a classic concurrency bug: two staff requesting the <em>same</em> open slot at the <em>same</em> instant could both be told they’d got it — a race that never shows up in casual testing and becomes likely exactly when the rota opens and everyone piles in.</p>
+
+  <div class="callout fix">
+    <h3><span class="tag">FIXED</span> The double-claim race</h3>
+    <p>The booking code read a slot’s status and then wrote, without holding a lock. The fix was small but surgical: every claim now runs inside an <strong>“immediate” database transaction</strong> with a <strong>status-guarded conditional update</strong>, so simultaneous claims serialise and the loser gets a clear “just taken” message instead of a false success. It’s covered by an automated test that fires six parallel requests at one slot and proves exactly one wins.</p>
+  </div>
+
+  <p>With that closed, I worked through the rest of the audit’s hardening list: <strong>login rate-limiting</strong> to blunt brute-force attempts; <strong>timezone-correct dates</strong> so “today” is the club’s local day, not the server’s UTC; <strong>input validation</strong> that returns tidy errors instead of 500s; <strong>security headers</strong> (HSTS, CSP, clickjacking protection); and a <strong>forced password change</strong> so no admin can keep running on a default password.</p>
+
+  <figure><img src="img/14-force-password.png" alt="Forced password change screen"/><figcaption>Accounts still on a default password are made to set a new one before they can use the app.</figcaption></figure>
+
+  <h2><span class="num">08</span>So — is it production-ready?</h2>
+  <p>For its actual job — one pool, a few dozen staff, a handful online at once — it’s <strong>deployed and ready</strong>. The architecture is clean, the security fundamentals are in place, and the feature set is genuinely complete.</p>
+
+  <div class="verdict">
+    <div class="vc good">
+      <h4>✓ Solid</h4>
+      <ul>
+        <li>Hashed passwords, parameterised queries, escaped output</li>
+        <li>Concurrency-safe booking, with tests</li>
+        <li>One-command deploy, HTTPS, backups documented</li>
+        <li>Complete, real feature set</li>
+      </ul>
+    </div>
+    <div class="vc todo">
+      <h4>↗ Next, if it grows</h4>
+      <ul>
+        <li>A shared message broker for multi-server scale</li>
+        <li>Postgres if it ever serves many pools</li>
+        <li>Email/push reminders for shifts &amp; expiring training</li>
+      </ul>
+    </div>
+  </div>
+  <p>SQLite and a single server are the right call here, not a compromise — and there’s a clear path to a bigger product if it’s ever needed. But that’s a <em>next-product</em> problem, not today’s.</p>
+
+  <h2><span class="num">09</span>The takeaway</h2>
+  <p>Four days, around fifty commits, one collaborator that never tired of an “actually, can we make the amber a little less aggressive” request. Claude Code didn’t just autocomplete functions — it scaffolded the project, carried the architecture across dozens of sessions, wrote the deploy pipeline, and turned a vague brief into something a leisure centre can genuinely run on.</p>
+  <p>The lesson isn’t “AI writes the code for you.” It’s that the bottleneck moves. With the typing and boilerplate handled, what’s left is the part that was always the actual job: deciding what to build, having the taste to know when it’s right, and the discipline to ask “but is it correct when everyone uses it at once?”</p>
+  <p>That, it turns out, is a pretty good division of labour.</p>
+
+</article>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="badge">
+      <svg class="wave" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="48" height="48" rx="11" fill="#26358B"/><path d="M7 22c4-4 7-4 11 0s7 4 11 0 7-4 11 0" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M7 30c4-4 7-4 11 0s7 4 11 0 7-4 11 0" stroke="#A4358B" stroke-width="3" stroke-linecap="round"/></svg>
+      Arc Swim Rota
+    </span>
+    <span>Built with FastAPI, SQLite &amp; vanilla JavaScript — and Claude Code.</span>
+  </div>
+</footer>
+
+</body>
+</html>

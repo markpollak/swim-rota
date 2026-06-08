@@ -4,9 +4,10 @@ Two versions of the same article about building the app with Claude Code, plus t
 
 | File | What it is | How to use it |
 |------|------------|---------------|
+| [`arc-swim-rota-post.html`](arc-swim-rota-post.html) | **Standalone designed page** — own HTML + CSS, hero, stat strip, screenshot grid. Open it in a browser as-is. | Double-click to view; host anywhere, or lift the markup/styles into your site. Images load from `img/` next to it. |
 | [`arc-swim-rota-blog.md`](arc-swim-rota-blog.md) | Clean Markdown version (~2,000 words) | Read it, or paste into any Markdown-aware CMS/editor. |
 | [`arc-swim-rota-gutenberg.html`](arc-swim-rota-gutenberg.html) | WordPress **Gutenberg block** version | New post → ⋮ menu → **Code editor** → paste the whole file → switch to **Visual editor**. |
-| [`img/`](img/) | 12 phone-resolution screenshots (860×1760, 2×) | Upload to the WordPress Media Library. |
+| [`img/`](img/) | 14 phone-resolution screenshots (860×1760, 2×) | Upload to the WordPress Media Library (the standalone HTML uses them directly). |
 
 ## Importing into WordPress (Gutenberg)
 
