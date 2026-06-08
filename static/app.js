@@ -416,8 +416,8 @@ async function viewHome() {
 
 // ---- Shared compact week grid (days = columns, shifts stacked under each day) ----
 function shiftBadge(s) {
-  // Lifeguard duty → purple life-ring icon; a class → short level code (L1, P&T…)
-  if (!s.level_id) return `<span class="ms-ring" title="Pool Lifeguard"></span>`;
+  // Lifeguard duty → red life-ring icon; a class → short level code (L1, P&T…)
+  if (!s.level_id) return `<span class="ms-lg-icon" title="Pool Lifeguard">🛟</span>`;
   const code = (s.level_name || "")
     .replace("Parents & Toddlers", "P&T")
     .replace("Level ", "L");
@@ -816,7 +816,7 @@ async function viewMyShifts() {
     </div>
     <div id="msGrid"></div>
     <div class="ms-legend">
-      <span><span class="ms-ring" style="display:inline-block;vertical-align:middle"></span> Lifeguard</span>
+      <span>🛟 Lifeguard</span>
       <span style="color:var(--green)">✓ Approved</span>
       <span style="color:var(--amber)">⏳ Pending</span>
       <span style="color:var(--muted)">× Release</span>

@@ -341,7 +341,7 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .ms-pill { border-radius: 5px; padding: 2px 4px; margin-bottom: 2px; font-size: .6rem; font-weight: 700; display: flex; align-items: center; gap: 2px; line-height: 1.3; }
 .ms-ok { background: var(--green-soft); color: var(--green); }
 .ms-pending { background: var(--amber-soft); color: var(--amber); }
-.ms-lg { background: var(--purple-soft); color: var(--purple); }
+.ms-lg { background: var(--red-soft); color: var(--red); }
 .ms-lbl { flex: 1; }
 .ms-chk { opacity: .7; flex-shrink: 0; }
 .ms-x { background: none; border: none; color: inherit; opacity: .45; font-size: .75rem; cursor: pointer; padding: 0 1px; flex-shrink: 0; line-height: 1; }
@@ -449,23 +449,19 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 }
 .ms-row.ms-ok      { background:var(--green-soft);  border-color:#bce6cd; }
 .ms-row.ms-pending { background:var(--amber-soft);  border-color:#f0d49a; }
-.ms-row.ms-lg      { background:var(--purple-soft); border-color:#cdbcf2; }
+.ms-row.ms-lg      { background:var(--red-soft); border-color:#f0bcbc; }
 .ms-t  { font-size:.57rem; font-weight:800; color:var(--ink); white-space:nowrap; flex-shrink:0; }
 .ms-lv { font-size:.68rem; font-weight:900; flex-shrink:0; }
 .ms-row.ms-ok      .ms-lv { color:var(--green); }
 .ms-row.ms-pending .ms-lv { color:var(--amber); }
-.ms-row.ms-lg      .ms-lv { color:var(--purple); }
+.ms-row.ms-lg      .ms-lv { color:var(--red); }
 .ms-st { font-size:.65rem; line-height:1; margin-left:auto; flex-shrink:0; }
 .ms-row.ms-ok      .ms-st { color:var(--green); }
 .ms-row.ms-pending .ms-st { color:var(--amber); }
-.ms-row.ms-lg      .ms-st { color:var(--purple); }
+.ms-row.ms-lg      .ms-st { color:var(--red); }
 
-/* purple life-ring icon = lifeguard duty */
-.ms-ring {
-  display:inline-block; width:13px; height:13px; border-radius:50%;
-  border:3.5px solid var(--purple); background:#fff; box-sizing:border-box;
-  flex-shrink:0; vertical-align:middle;
-}
+/* red life-ring emoji = lifeguard duty */
+.ms-lg-icon { font-size:.75rem; line-height:1; flex-shrink:0; }
 
 /* release button — small × in the chip corner */
 .ms-x {
