@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "swim-rota",
-      "runtimeExecutable": "../.venv/bin/python",
-      "runtimeArgs": ["-m", "uvicorn", "server:app", "--host", "127.0.0.1", "--port", "8080"],
+      "runtimeExecutable": "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3",
+      "runtimeArgs": ["-m", "uvicorn", "server:app", "--host", "127.0.0.1", "--port", "8080", "--reload"],
       "port": 8080
     }
   ]
