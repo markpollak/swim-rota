@@ -39,12 +39,15 @@ You can be live on Path A in ~10 minutes and switch to Path B any time.
 ### A1. Add the DNS record (Cloudflare dashboard)
 Cloudflare → select **cmwebstats.com** → **DNS → Records**:
 
-- **Delete** any existing `A`/`AAAA`/`CNAME` record on name **`@`** that points
-  somewhere else (old host).
-- **Add record:** Type **A**, Name **`@`**, IPv4 **`165.232.96.67`**,
-  **Proxy status: DNS only (grey cloud ☁️)**, TTL Auto. **Save.**
-- *(Optional `www`)* Add record: Type **CNAME**, Name **`www`**,
-  Target **`cmwebstats.com`**, **DNS only**. Save.
+- **Edit the existing `A` record** on name **`@`** (currently proxied at Cloudflare):
+  set IPv4 to **`165.232.96.67`** and **Proxy status: DNS only (grey cloud ☁️)**,
+  TTL Auto. **Save.** (If there's an `AAAA`/`CNAME` on `@` instead, delete it and add
+  this A record.)
+- **Leave the `MX` records (ImprovMX) alone** — email forwarding is unaffected.
+- *(`www` is optional)* The default Caddy config only answers on the apex. The clean
+  way to catch `www` is a Cloudflare **Redirect Rule**
+  (`www.cmwebstats.com/*` → `https://cmwebstats.com/$1`), which needs a **Proxied**
+  `www` record. Or just skip `www`.
 
 > **Why grey cloud:** it lets Let's Encrypt reach the droplet directly so Caddy can
 > prove it owns the domain and issue a real certificate. (Orange cloud breaks that
