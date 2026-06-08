@@ -2224,14 +2224,18 @@ async function adminChannels() {
       <button class="btn sub sm" id="newChBtn2">＋ New channel</button>
     </div>
     <button class="btn ghost sm" id="backToMsgs" style="margin-bottom:14px">‹ Back to messages</button>
-    ${chs.map((ch) => `
+    ${chs.filter((c) => c.type !== "dm").map((ch) => {
+      const linkedRole = ch.role_id ? State.roles.find((r) => r.id === ch.role_id) : null;
+      return `
       <div class="card" style="margin-bottom:10px;border-left:4px solid ${ch.color}">
         <div class="between">
           <div><strong>${esc(ch.name)}</strong>
-            <div class="small muted">${ch.member_count} members${ch.description ? " · " + esc(ch.description) : ""}</div></div>
+            <div class="small muted">${ch.member_count} members${linkedRole ? ` · <span style="color:${linkedRole.color}">⚙ ${esc(linkedRole.name)}</span>` : ""}${ch.description ? " · " + esc(ch.description) : ""}</div>
+          </div>
           <button class="btn sub sm" data-edit-ch="${ch.id}">Edit</button>
         </div>
-      </div>`).join("")}`;
+      </div>`;
+    }).join("")}`;
   $("#backToMsgs").addEventListener("click", () => renderChannelList());
   $("#newChBtn2").addEventListener("click", () => channelSheet(null, allUsers));
   screen().querySelectorAll("[data-edit-ch]").forEach((b) =>
@@ -2246,11 +2250,16 @@ async function channelSheet(ch, allUsers) {
     try { members = await api(`/api/channels/${ch.id}/members`); } catch {}
   }
   const memberIds = new Set(members.map((m) => m.id));
+  const viaRoleIds = new Set(members.filter((m) => m.via_role).map((m) => m.id));
   const userChecks = allUsers.map((u) => `
     <label class="checkrow ${memberIds.has(u.id) ? "on" : ""}">
       <input type="checkbox" value="${u.id}" ${memberIds.has(u.id) ? "checked" : ""}/>
       ${esc(u.full_name)} <span class="muted small">· ${esc(u.roles.map(r=>r.name).join(", ") || "no roles")}</span>
+      ${viaRoleIds.has(u.id) ? `<span class="pill small" style="font-size:.65rem;padding:1px 6px;margin-left:4px">auto</span>` : ""}
     </label>`).join("");
+
+  const roleOpts = `<option value="">None (manual members only)</option>` +
+    State.roles.map((r) => `<option value="${r.id}" ${ch?.role_id === r.id ? "selected" : ""}>${esc(r.name)}</option>`).join("");
 
   const sheet = openSheet(`
     <h2>${isNew ? "New channel" : "Edit: " + esc(ch.name)}</h2>
@@ -2258,7 +2267,12 @@ async function channelSheet(ch, allUsers) {
       <div class="field"><label>Channel name</label><input id="cs-name" value="${esc(ch?.name||"")}" placeholder="e.g. Lifeguards"/></div>
       <div class="field"><label>Description (optional)</label><input id="cs-desc" value="${esc(ch?.description||"")}" placeholder="What this channel is for"/></div>
       <div class="field"><label>Colour</label><input id="cs-color" type="color" value="${ch?.color||"#26358B"}" style="height:48px;padding:4px"/></div>
-      <div class="field"><label>Members</label><div id="cs-members" class="stack">${userChecks}</div></div>
+      <div class="field">
+        <label>Linked role</label>
+        <select id="cs-role-link">${roleOpts}</select>
+        <p class="small muted" style="margin-top:4px">Users get added/removed from this channel automatically when the role is assigned or removed.</p>
+      </div>
+      <div class="field"><label>Additional members</label><div id="cs-members" class="stack">${userChecks}</div></div>
       <button class="btn block" id="cs-save">${isNew ? "Create channel" : "Save changes"}</button>
       ${!isNew ? `<button class="btn danger block" id="cs-del" style="margin-top:6px">Delete channel</button>` : ""}
     </div>`);
@@ -2270,7 +2284,9 @@ async function channelSheet(ch, allUsers) {
     const name = $("#cs-name").value.trim();
     if (!name) return toast("Name required", "err");
     const member_ids = [...sheet.querySelectorAll("#cs-members input:checked")].map((c) => Number(c.value));
-    const body = { name, description: $("#cs-desc").value.trim(), color: $("#cs-color").value, member_ids };
+    const roleLink = $("#cs-role-link").value;
+    const body = { name, description: $("#cs-desc").value.trim(), color: $("#cs-color").value, member_ids,
+                   role_id: roleLink ? Number(roleLink) : null };
     try {
       if (isNew) await api("/api/channels", { method: "POST", body });
       else await api(`/api/channels/${ch.id}`, { method: "PATCH", body });

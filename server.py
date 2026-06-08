@@ -534,6 +534,7 @@ async def create_user(request: Request, admin=Depends(require_admin)):
         uid = cur.lastrowid
         for rid in b.get("role_ids", []):
             conn.execute("INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?,?)", (uid, rid))
+            _sync_role_channel_add(conn, uid, rid)
         # Auto-create DM channel for the new user
         ensure_dm_channels(conn)
         return {"ok": True, "id": uid}
@@ -560,9 +561,16 @@ async def update_user(user_id: int, request: Request, admin=Depends(require_admi
             conn.execute("UPDATE users SET password_hash=? WHERE id=?",
                          (auth.hash_password(b["password"]), user_id))
         if "role_ids" in b:
+            old_roles = {r["role_id"] for r in conn.execute(
+                "SELECT role_id FROM user_roles WHERE user_id=?", (user_id,)).fetchall()}
+            new_roles = set(b["role_ids"])
             conn.execute("DELETE FROM user_roles WHERE user_id=?", (user_id,))
-            for rid in b["role_ids"]:
+            for rid in new_roles:
                 conn.execute("INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?,?)", (user_id, rid))
+            for rid in (new_roles - old_roles):
+                _sync_role_channel_add(conn, user_id, rid)
+            for rid in (old_roles - new_roles):
+                _sync_role_channel_remove(conn, user_id, rid)
         return {"ok": True}
 
 
@@ -916,6 +924,22 @@ def _fanout(channel_id: int, payload: dict):
         except asyncio.QueueFull: pass
 
 
+def _sync_role_channel_add(conn, user_id: int, role_id: int):
+    ch = conn.execute("SELECT id FROM channels WHERE role_id=? AND active=1", (role_id,)).fetchone()
+    if ch:
+        conn.execute(
+            "INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at, via_role) VALUES (?,?,?,1)",
+            (ch["id"], user_id, now_iso()))
+
+
+def _sync_role_channel_remove(conn, user_id: int, role_id: int):
+    ch = conn.execute("SELECT id FROM channels WHERE role_id=? AND active=1", (role_id,)).fetchone()
+    if ch:
+        conn.execute(
+            "DELETE FROM channel_members WHERE channel_id=? AND user_id=? AND via_role=1",
+            (ch["id"], user_id))
+
+
 def _user_channel_ids(conn, user_id: int):
     rows = conn.execute(
         "SELECT channel_id FROM channel_members WHERE user_id=?", (user_id,)).fetchall()
@@ -955,11 +979,13 @@ def _channel_payload(conn, ch, requesting_uid=None):
                 "SELECT full_name FROM users WHERE id=?", (dm_user_id,)).fetchone()
             display_name = dm_user["full_name"] if dm_user else ch["name"]
 
+    role_id = ch["role_id"] if "role_id" in ch.keys() else None
     return {
         "id": ch["id"], "name": display_name, "description": ch["description"],
         "color": ch["color"], "member_count": count,
         "last_message": dict(last) if last else None,
         "unread": unread, "type": ch_type, "dm_user_id": dm_user_id,
+        "role_id": role_id,
     }
 
 
@@ -983,16 +1009,24 @@ def list_channels(user=Depends(current_user)):
 async def create_channel(request: Request, admin=Depends(require_admin)):
     b = await request.json()
     if not b.get("name"): raise HTTPException(400, "name required")
+    role_id = b.get("role_id") or None
     with db.get_db() as conn:
         try:
             cur = conn.execute(
-                "INSERT INTO channels (name, description, color, created_by, created_at) VALUES (?,?,?,?,?)",
-                (b["name"], b.get("description",""), b.get("color","#26358B"), admin["id"], now_iso()))
+                "INSERT INTO channels (name, description, color, created_by, created_at, role_id) VALUES (?,?,?,?,?,?)",
+                (b["name"], b.get("description",""), b.get("color","#26358B"), admin["id"], now_iso(), role_id))
         except Exception: raise HTTPException(409, "A channel with that name already exists.")
         cid = cur.lastrowid
+        # Manual members
         for uid in b.get("member_ids", []):
-            conn.execute("INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at) VALUES (?,?,?)",
+            conn.execute("INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at, via_role) VALUES (?,?,?,0)",
                          (cid, uid, now_iso()))
+        # Backfill role members
+        if role_id:
+            role_users = conn.execute("SELECT user_id FROM user_roles WHERE role_id=?", (role_id,)).fetchall()
+            for ru in role_users:
+                conn.execute("INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at, via_role) VALUES (?,?,?,1)",
+                             (cid, ru["user_id"], now_iso()))
         return {"ok": True, "id": cid}
 
 
@@ -1001,15 +1035,44 @@ async def update_channel(cid: int, request: Request, admin=Depends(require_admin
     b = await request.json()
     with db.get_db() as conn:
         fields, params = [], []
-        for col in ["name","description","color"]:
+        for col in ["name", "description", "color"]:
             if col in b: fields.append(f"{col}=?"); params.append(b[col])
         if "active" in b: fields.append("active=?"); params.append(1 if b["active"] else 0)
-        if fields: params.append(cid); conn.execute(f"UPDATE channels SET {','.join(fields)} WHERE id=?", params)
+
+        if "role_id" in b:
+            old_ch = conn.execute("SELECT role_id FROM channels WHERE id=?", (cid,)).fetchone()
+            old_role_id = old_ch["role_id"] if old_ch and "role_id" in old_ch.keys() else None
+            new_role_id = b["role_id"] or None
+            fields.append("role_id=?"); params.append(new_role_id)
+            # Remove auto-added members of the old role
+            if old_role_id and old_role_id != new_role_id:
+                old_users = conn.execute("SELECT user_id FROM user_roles WHERE role_id=?", (old_role_id,)).fetchall()
+                for ru in old_users:
+                    conn.execute("DELETE FROM channel_members WHERE channel_id=? AND user_id=? AND via_role=1",
+                                 (cid, ru["user_id"]))
+            # Backfill all current members of the new role
+            if new_role_id:
+                new_users = conn.execute("SELECT user_id FROM user_roles WHERE role_id=?", (new_role_id,)).fetchall()
+                for ru in new_users:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at, via_role) VALUES (?,?,?,1)",
+                        (cid, ru["user_id"], now_iso()))
+
+        if fields:
+            params.append(cid)
+            conn.execute(f"UPDATE channels SET {','.join(fields)} WHERE id=?", params)
+
         if "member_ids" in b:
-            conn.execute("DELETE FROM channel_members WHERE channel_id=?", (cid,))
-            for uid in b["member_ids"]:
-                conn.execute("INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at) VALUES (?,?,?)",
-                             (cid, uid, now_iso()))
+            new_ids = set(b["member_ids"])
+            existing = conn.execute("SELECT user_id FROM channel_members WHERE channel_id=?", (cid,)).fetchall()
+            for row in existing:
+                if row["user_id"] not in new_ids:
+                    conn.execute("DELETE FROM channel_members WHERE channel_id=? AND user_id=?",
+                                 (cid, row["user_id"]))
+            for uid in new_ids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at, via_role) VALUES (?,?,?,0)",
+                    (cid, uid, now_iso()))
         return {"ok": True}
 
 
@@ -1024,7 +1087,7 @@ def delete_channel(cid: int, admin=Depends(require_admin)):
 def channel_members(cid: int, user=Depends(current_user)):
     with db.get_db() as conn:
         rows = conn.execute(
-            """SELECT u.id, u.full_name, u.username FROM users u
+            """SELECT u.id, u.full_name, u.username, cm.via_role FROM users u
                JOIN channel_members cm ON cm.user_id=u.id
                WHERE cm.channel_id=? ORDER BY u.full_name""", (cid,)).fetchall()
         return db.dict_rows(rows)
