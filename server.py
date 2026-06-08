@@ -228,6 +228,7 @@ def user_payload(conn, u):
         deleted_by_name = db_row["full_name"] if db_row else None
     return {
         "id": u["id"], "username": u["username"], "full_name": u["full_name"],
+        "display_name": u.get("display_name"),
         "email": u["email"], "phone": u["phone"], "is_admin": bool(u["is_admin"]),
         "training_expiry": expiry, "training_status": training_status,
         "roles": roles, "deleted_at": u.get("deleted_at"), "deleted_by_name": deleted_by_name,
@@ -308,9 +309,17 @@ async def update_settings(request: Request, admin=Depends(require_admin)):
 # ----------------------------------------------------------------------------
 # slots
 # ----------------------------------------------------------------------------
+def default_display_name(full_name: str) -> str:
+    parts = (full_name or "").strip().split()
+    if len(parts) >= 2:
+        return parts[0] + parts[1][0].upper()
+    return parts[0] if parts else full_name
+
+
 SLOT_SELECT = """
 SELECT s.*, r.name role_name, r.color role_color, r.requires_training,
-       l.name level_name, u.full_name assigned_name
+       l.name level_name, u.full_name assigned_name,
+       u.display_name assigned_display_name
 FROM slots s
 JOIN roles r ON r.id = s.role_id
 LEFT JOIN levels l ON l.id = s.level_id
@@ -718,10 +727,11 @@ async def create_user(request: Request, admin=Depends(require_admin)):
     with db.get_db() as conn:
         if conn.execute("SELECT 1 FROM users WHERE lower(username)=?", (uname,)).fetchone():
             raise HTTPException(409, "That username is already taken.")
+        _dname = b.get("display_name") or default_display_name(b["full_name"])
         cur = conn.execute(
-            """INSERT INTO users (username, password_hash, full_name, email, phone,
-                    is_admin, training_expiry, created_at) VALUES (?,?,?,?,?,?,?,?)""",
-            (uname, auth.hash_password(pw), b["full_name"], b.get("email"), b.get("phone"),
+            """INSERT INTO users (username, password_hash, full_name, display_name, email, phone,
+                    is_admin, training_expiry, created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+            (uname, auth.hash_password(pw), b["full_name"], _dname, b.get("email"), b.get("phone"),
              1 if b.get("is_admin") else 0, b.get("training_expiry") or None, now_iso()))
         uid = cur.lastrowid
         for rid in b.get("role_ids", []):
@@ -741,7 +751,7 @@ async def update_user(user_id: int, request: Request, admin=Depends(require_admi
         if not conn.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone():
             raise HTTPException(404, "User not found")
         fields, params = [], []
-        for col in ["full_name", "email", "phone", "training_expiry"]:
+        for col in ["full_name", "display_name", "email", "phone", "training_expiry"]:
             if col in b:
                 fields.append(f"{col}=?"); params.append(b[col] or None)
         if "is_admin" in b:

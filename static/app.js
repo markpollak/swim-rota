@@ -1571,7 +1571,7 @@ async function rotaBuilder() {
     <div class="filterbar" style="margin-bottom:4px">${roleTabsHtml}</div>
     ${levelChipsHtml ? `<div class="filterbar" style="margin-bottom:10px">${levelChipsHtml}</div>` : ""}
 
-    <div class="card" style="margin-bottom:12px">
+    <div class="card rb-controls" style="margin-bottom:12px">
       <div class="between">
         <div class="field" style="margin:0;flex:1">
           <label>Assign to</label>
@@ -1580,19 +1580,21 @@ async function rotaBuilder() {
             ${qualified.map((u) => `<option value="${u.id}">${esc(u.full_name)}</option>`).join("")}
           </select>
         </div>
-        <div style="display:flex;gap:6px;align-items:flex-end;padding-bottom:0">
+        <div style="display:flex;gap:6px;align-items:flex-end;padding-bottom:0;flex-wrap:wrap">
           <button class="btn sub sm" id="rb-prev">‹</button>
           <span class="small" style="white-space:nowrap;padding:0 4px">${fmtDate(weekISO).slice(4)}–${fmtDate(weekEnd).slice(4)}</span>
           <button class="btn sub sm" id="rb-next">›</button>
+          <button class="btn sub sm${State._rotaWidescreen ? " rb-wide-active" : ""}" id="rb-wide" title="Expand to 95% browser width — shows full staff names">⊞ Wide</button>
+          <button class="btn sub sm" id="rb-print" title="Print this rota as PDF">🖨 Print</button>
         </div>
       </div>
     </div>
 
     <div id="rb-grid">
-      ${times.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(gridSlots, times, State._rotaWeekStart, isAllView, State.roles)}
+      ${times.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(gridSlots, times, State._rotaWeekStart, isAllView, State.roles, State._rotaWidescreen)}
     </div>
 
-    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+    <div class="rb-controls" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn green" id="rb-apply" disabled>Assign selected slots</button>
       <button class="btn ghost sm" id="rb-clearsel">Clear selection</button>
       <span class="small muted" id="rb-selcount" style="align-self:center"></span>
@@ -1612,7 +1614,7 @@ async function rotaBuilder() {
       : roleSlots;
     const newTimes = [...new Set(filtered.map((s) => s.start_time))].sort();
     document.getElementById("rb-grid").innerHTML =
-      newTimes.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(filtered, newTimes, State._rotaWeekStart, isAllView, State.roles);
+      newTimes.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(filtered, newTimes, State._rotaWeekStart, isAllView, State.roles, State._rotaWidescreen);
     bindWeekGrid ? null : null; // re-bind cell click handlers
     mb.querySelectorAll(".rb-cell[data-sid]").forEach((cell) =>
       cell.addEventListener("click", () => {
@@ -1638,6 +1640,8 @@ async function rotaBuilder() {
   // Week nav
   $("#rb-prev").onclick = () => { State._rotaWeekStart = addDays(State._rotaWeekStart, -7); rotaBuilder(); };
   $("#rb-next").onclick = () => { State._rotaWeekStart = addDays(State._rotaWeekStart, 7); rotaBuilder(); };
+  $("#rb-wide").addEventListener("click", () => { State._rotaWidescreen = !State._rotaWidescreen; rotaBuilder(); });
+  $("#rb-print").addEventListener("click", () => window.print());
 
   // Person change — refresh grid to highlight their existing assignments
   $("#rb-person").addEventListener("change", () => refreshRotaGrid(roleSlots, times, State._rotaWeekStart));
@@ -1694,7 +1698,7 @@ async function rotaBuilder() {
   });
 }
 
-function buildRotaGrid(roleSlots, times, weekStart, allView = false, allRoles = []) {
+function buildRotaGrid(roleSlots, times, weekStart, allView = false, allRoles = [], widescreen = false) {
   const today = isoToday();
   const DAYS_SHORT = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
   const days = Array.from({length: 7}, (_, i) => {
@@ -1728,7 +1732,9 @@ function buildRotaGrid(roleSlots, times, weekStart, allView = false, allRoles = 
       return `<td class="rg-cell">${ss.map((s) => {
         const isPast = day.iso < today;
         const taken = s.status !== "open";
-        const name = s.assigned_name ? s.assigned_name.split(" ")[0] : null;
+        const name = s.assigned_name
+          ? (widescreen ? s.assigned_name : (s.assigned_display_name || s.assigned_name.split(" ")[0]))
+          : null;
         const cls = taken ? (s.status === "approved" ? "rg-taken-ok" : "rg-taken-pending") : isPast ? "rg-past" : "rg-open";
         const lvl = s.level_id
           ? (s.level_name || "").replace("Parents & Toddlers", "P&T").replace("Level ", "L")
@@ -1754,7 +1760,7 @@ function buildRotaGrid(roleSlots, times, weekStart, allView = false, allRoles = 
        <span class="rb-cell rg-open" style="display:inline-block;padding:2px 8px">Open</span>
        <span class="rb-cell rg-sel" style="display:inline-block;padding:2px 8px">Selected</span>`;
 
-  return `<div class="rg-scroll"><table class="rg-table"><thead>${header}</thead><tbody>${bodyRows}</tbody></table></div>
+  return `<div class="rg-scroll${widescreen ? " rg-wide" : ""}"><table class="rg-table"><thead>${header}</thead><tbody>${bodyRows}</tbody></table></div>
     <div class="rg-legend">${legend}</div>`;
 }
 
@@ -2699,6 +2705,11 @@ function userSheet(u) {
     <h2>${isNew ? "Add person" : esc(u.full_name)}</h2>
     <div class="stack" style="margin-top:14px">
       <div class="field"><label>Full name</label><input id="u-name" value="${esc(u?.full_name || "")}"/></div>
+      <div class="field">
+        <label>Rota short name</label>
+        <input id="u-dname" value="${esc(u?.display_name || "")}" maxlength="20" placeholder="${isNew ? "auto-generated from full name" : ""}"/>
+        <div class="small muted" style="margin-top:3px">Shown in the weekly rota grid where space is limited (e.g. "SuzanneP"). Keep it short — 10 characters or fewer works best. Only admins can change this.</div>
+      </div>
       <div class="field"><label>Username</label><input id="u-username" value="${esc(u?.username || "")}" ${isNew ? "" : "disabled"} autocapitalize="none"/></div>
       <div class="field"><label>Email</label><input id="u-email" type="email" value="${esc(u?.email || "")}"/></div>
       <div class="field"><label>Phone</label><input id="u-phone" value="${esc(u?.phone || "")}"/></div>
@@ -2714,7 +2725,8 @@ function userSheet(u) {
   $("#u-save").addEventListener("click", async () => {
     const role_ids = [...sheet.querySelectorAll('.field input[type=checkbox]:checked')].map((c) => Number(c.value)).filter(Boolean);
     const body = {
-      full_name: $("#u-name").value, email: $("#u-email").value, phone: $("#u-phone").value,
+      full_name: $("#u-name").value, display_name: $("#u-dname").value || undefined,
+      email: $("#u-email").value, phone: $("#u-phone").value,
       training_expiry: $("#u-train").value || null, is_admin: $("#u-admin").checked, role_ids,
     };
     if ($("#u-pass").value) body.password = $("#u-pass").value;

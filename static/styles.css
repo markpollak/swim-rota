@@ -506,3 +506,40 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .ms-key-ok      { background:var(--green-soft);  color:var(--green); }
 .ms-key-pending { background:var(--amber-soft);  color:var(--amber); }
 .ms-key-x       { background:var(--magenta); color:#fff; border-radius:50%; }
+
+/* ------------------------------------------------------------------ widescreen rota */
+/* Active state for the Wide toggle button */
+.rb-wide-active { background:var(--blue) !important; color:#fff !important; border-color:var(--blue) !important; }
+
+/* When widescreen is on, break out of the 720px app-main container to 95vw */
+.rg-wide {
+  width: 95vw;
+  max-width: 95vw !important;
+  /* Full-bleed: left 50% of container + translateX(-50% of self) centres at viewport mid */
+  position: relative;
+  left: 50%;
+  transform: translateX(-50%);
+  overflow-x: auto;
+}
+.rg-wide .rg-th    { min-width: 100px; }
+.rg-wide .rg-cell  { max-width: 140px; }
+.rg-wide .rb-cell  { max-width: 130px; font-size: .72rem; white-space: normal; overflow: visible; text-overflow: clip; }
+
+/* ------------------------------------------------------------------ print */
+@media print {
+  /* Hide all navigation and admin controls */
+  .topbar, .bottomnav, .filterbar, .rb-controls, .rb-skip-panel,
+  .tabs, .rg-legend { display: none !important; }
+  /* Expand the rota table to full page width and make it flat (no scroll) */
+  .rg-scroll {
+    max-width: 100% !important; width: 100% !important;
+    overflow: visible !important; position: static !important;
+    transform: none !important; left: auto !important;
+    border: none !important;
+  }
+  .rg-table  { font-size: .65rem; width: 100%; }
+  .rg-cell   { max-width: none !important; }
+  .rb-cell   { max-width: none !important; white-space: normal !important; overflow: visible !important; }
+  /* Keep status colours in print */
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

@@ -242,6 +242,10 @@ def init_db():
             "ALTER TABLE users ADD COLUMN deleted_at TEXT",
             "ALTER TABLE users ADD COLUMN deleted_by INTEGER",
             "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN display_name TEXT",
+            """UPDATE users SET display_name = CASE WHEN instr(full_name,' ')>0
+               THEN substr(full_name,1,instr(full_name,' ')-1)||substr(full_name,instr(full_name,' ')+1,1)
+               ELSE full_name END WHERE display_name IS NULL""",
         ]:
             try:
                 conn.execute(stmt)
