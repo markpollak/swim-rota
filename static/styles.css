@@ -366,6 +366,12 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .rg-taken-pending { background: var(--amber-soft); color: var(--amber); border: 1.5px solid var(--amber); cursor: default; }
 .rg-past { background: #f5f5f5; color: #bbb; border: 1.5px dashed #ddd; cursor: not-allowed; }
 .rg-lvl { font-weight:900; font-size:.72rem; opacity:.85; }
+.rb-skip-panel { background:var(--red-soft); border:1px solid #f0bcbc; border-radius:10px; padding:10px 14px; margin-bottom:12px; font-size:.8rem; color:var(--red); }
+.rb-skip-panel strong { display:block; margin-bottom:6px; }
+.rb-skip-list { margin:0; padding-left:16px; display:flex; flex-direction:column; gap:4px; }
+.rb-skip-list li { color:var(--ink); }
+.rb-skip-slot { font-weight:700; margin-right:6px; }
+.rb-skip-reason { color:var(--red); font-size:.75rem; }
 
 /* hint bar for open shifts */
 .open-hint {

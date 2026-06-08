@@ -1253,7 +1253,26 @@ async function rotaBuilder() {
     const btn = $("#rb-apply"); btn.disabled = true; btn.textContent = "Assigning…";
     try {
       const r = await api("/api/slots/bulk-assign", { method: "POST", body: { user_id: uid, slot_ids: ids, auto_approve: true } });
-      toast(`Assigned ${r.assigned} slot${r.assigned !== 1 ? "s" : ""}${r.skipped ? ` (${r.skipped} skipped)` : ""}`, "ok");
+      if (r.assigned) toast(`Assigned ${r.assigned} slot${r.assigned !== 1 ? "s" : ""}`, "ok");
+      // Show skipped details as a persistent panel
+      const existing = document.getElementById("rb-skipped-panel");
+      if (existing) existing.remove();
+      if (r.skipped_details?.length) {
+        const DOW_FULL = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+        const panel = document.createElement("div");
+        panel.id = "rb-skipped-panel";
+        panel.className = "rb-skip-panel";
+        panel.innerHTML = `<strong>⚠ ${r.skipped_details.length} shift${r.skipped_details.length !== 1 ? "s" : ""} could not be assigned:</strong>
+          <ul class="rb-skip-list">${r.skipped_details.map((d) => {
+            if (!d.date) return `<li>${esc(d.reason)}</li>`;
+            const dt = parseISO(d.date);
+            const dow = DOW_FULL[dt.getDay() === 0 ? 6 : dt.getDay() - 1];
+            const dateStr = `${dow} ${d.date.slice(8, 10)} ${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(d.date.slice(5,7))-1]}`;
+            const lvl = d.level_name ? d.level_name.replace("Parents & Toddlers","P&T") : "Pool duty";
+            return `<li><span class="rb-skip-slot">${dateStr} ${d.start_time} · ${esc(d.role_name)} ${esc(lvl)}</span><span class="rb-skip-reason">${esc(d.reason)}</span></li>`;
+          }).join("")}</ul>`;
+        mb.insertAdjacentElement("beforebegin", panel);
+      }
       rotaBuilder();
     } catch (err) { toast(err.message, "err"); btn.disabled = false; btn.textContent = "Assign selected slots"; }
   });

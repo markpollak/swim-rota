@@ -396,18 +396,49 @@ async def bulk_assign(request: Request, admin=Depends(require_admin)):
     auto_approve = bool(b.get("auto_approve", True))
     if not uid or not slot_ids:
         raise HTTPException(400, "user_id and slot_ids required")
-    assigned, skipped = [], []
+    assigned, skipped_details = [], []
     with db.get_db() as conn:
+        u_row = conn.execute("SELECT full_name FROM users WHERE id=?", (uid,)).fetchone()
+        person = (u_row["full_name"].split()[0] if u_row else "They")
         for sid in slot_ids:
-            s = conn.execute("SELECT * FROM slots WHERE id=?", (sid,)).fetchone()
-            if not s or s["status"] != "open":
-                skipped.append(sid)
+            s = conn.execute(
+                """SELECT s.*, l.name level_name, r.name role_name
+                   FROM slots s LEFT JOIN levels l ON l.id=s.level_id
+                   JOIN roles r ON r.id=s.role_id WHERE s.id=?""", (sid,)).fetchone()
+            if not s:
+                skipped_details.append({"slot_id": sid, "reason": "Slot not found"})
+                continue
+            if s["status"] != "open":
+                skipped_details.append({"slot_id": sid, "date": s["date"],
+                    "start_time": s["start_time"], "level_name": s["level_name"],
+                    "role_name": s["role_name"], "reason": "Slot already taken"})
                 continue
             try:
                 check_qualified(conn, uid, dict(s))
+            except HTTPException as e:
+                skipped_details.append({"slot_id": sid, "date": s["date"],
+                    "start_time": s["start_time"], "level_name": s["level_name"],
+                    "role_name": s["role_name"], "reason": e.detail})
+                continue
+            try:
                 check_double_book(conn, uid, dict(s))
             except HTTPException:
-                skipped.append(sid)
+                clash = conn.execute(
+                    """SELECT s2.start_time, s2.end_time, l.name level_name, r.name role_name
+                       FROM slots s2 LEFT JOIN levels l ON l.id=s2.level_id
+                       JOIN roles r ON r.id=s2.role_id
+                       WHERE s2.assigned_user_id=? AND s2.date=?
+                       AND s2.status IN ('approved','requested') AND s2.id!=?
+                       AND s2.start_time < ? AND ? < s2.end_time""",
+                    (uid, s["date"], sid, s["end_time"], s["start_time"])).fetchone()
+                if clash:
+                    lvl = clash["level_name"] or "pool duty"
+                    reason = f"{person} is already allocated: {clash['role_name']}, {lvl} ({clash['start_time']}–{clash['end_time']})"
+                else:
+                    reason = f"{person} has a clashing shift at this time"
+                skipped_details.append({"slot_id": sid, "date": s["date"],
+                    "start_time": s["start_time"], "level_name": s["level_name"],
+                    "role_name": s["role_name"], "reason": reason})
                 continue
             status = "approved" if auto_approve else "requested"
             conn.execute(
@@ -417,13 +448,13 @@ async def bulk_assign(request: Request, admin=Depends(require_admin)):
                  admin["id"] if auto_approve else None, sid))
             assigned.append(sid)
         if assigned:
-            u = conn.execute("SELECT full_name FROM users WHERE id=?", (uid,)).fetchone()
             notify_user(conn, uid,
                 f"You've been assigned {len(assigned)} shift{'s' if len(assigned)>1 else ''} by {admin['full_name']}.")
             conn.execute("INSERT INTO audit (ts, user_id, action, detail) VALUES (?,?,?,?)",
                          (now_iso(), admin["id"], "bulk_assign",
                           f"user {uid}: slots {assigned}"))
-    return {"ok": True, "assigned": len(assigned), "skipped": len(skipped)}
+    return {"ok": True, "assigned": len(assigned),
+            "skipped": len(skipped_details), "skipped_details": skipped_details}
 
 
 @app.get("/api/slots/week")
