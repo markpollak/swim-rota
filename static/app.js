@@ -2574,6 +2574,7 @@ function refreshShiftViews() {
   if (!State.token || !State.user) return;
   if (State.view === "home") viewHome();
   else if (State.view === "myshifts") viewMyShifts();
+  else if (State.view === "calendar") viewCalendar();
 }
 document.addEventListener("visibilitychange", refreshShiftViews);
 setInterval(refreshShiftViews, 3 * 60 * 1000);
