@@ -14,8 +14,9 @@ const State = {
   // calendar
   weekStart: null,
   selectedDate: null,
-  calendarFilter: null,  // null = my-roles default; role_id = that role; 'all' = everything
-  calendarView: "week",  // "day" | "week"
+  calendarFilter: null,      // null = my-roles default; role_id = that role; 'all' = everything
+  calendarLevelFilter: null, // null = all; 'duty' = pool duty; number = level_id
+  calendarView: "week",      // "day" | "week"
   // my shifts
   myTab: "upcoming",
   // admin
@@ -483,13 +484,18 @@ function bindGoto(root) {
 function applyCalendarFilter(slots) {
   const u = State.user;
   const f = State.calendarFilter;
-  // explicit role_id chip selected
-  if (typeof f === "number") return slots.filter((s) => s.role_id === f);
-  // "all" — admins default here, or non-admin explicitly chose it
-  if (f === "all" || u.is_admin) return slots;
-  // default (null) for non-admins: only roles they hold
-  const myRoleIds = new Set(u.roles.map((r) => r.id));
-  return slots.filter((s) => myRoleIds.has(s.role_id));
+  let out = slots;
+  // role filter
+  if (typeof f === "number") out = out.filter((s) => s.role_id === f);
+  else if (f !== "all" && !u.is_admin) {
+    const myRoleIds = new Set(u.roles.map((r) => r.id));
+    out = out.filter((s) => myRoleIds.has(s.role_id));
+  }
+  // level / class filter
+  const lf = State.calendarLevelFilter;
+  if (lf === "duty") out = out.filter((s) => !s.level_id);
+  else if (typeof lf === "number") out = out.filter((s) => s.level_id === lf);
+  return out;
 }
 
 function renderFilterBar() {
@@ -516,6 +522,26 @@ function renderFilterBar() {
   return `<div class="filterbar" id="filterbar">${chips.join("")}</div>`;
 }
 
+function renderLevelFilterBar(slots) {
+  const lf = State.calendarLevelFilter;
+  // Gather distinct levels present in these slots
+  const hasDuty = slots.some((s) => !s.level_id);
+  const levelIds = [...new Set(slots.filter((s) => s.level_id).map((s) => s.level_id))];
+  const levels = levelIds.map((id) => State.levels.find((l) => l.id === id)).filter(Boolean)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  if (!hasDuty && levels.length === 0) return "";
+  const chips = [
+    `<button class="filterchip${lf === null ? " active" : ""}" data-lvl="">All</button>`,
+    ...(hasDuty ? [`<button class="filterchip${lf === "duty" ? " active" : ""}" data-lvl="duty">🛟 Pool duty</button>`] : []),
+    ...levels.map((l) => {
+      const active = lf === l.id;
+      const short = l.name.replace("Parents & Toddlers", "P&T").replace("Level ", "L");
+      return `<button class="filterchip${active ? " active" : ""}" data-lvl="${l.id}">${esc(short)}</button>`;
+    }),
+  ];
+  return `<div class="filterbar" id="levelfilterbar">${chips.join("")}</div>`;
+}
+
 async function viewCalendar() {
   if (!State.weekStart) State.weekStart = mondayOf(parseISO(isoToday()));
   if (!State.selectedDate) {
@@ -538,7 +564,7 @@ async function viewCalendar() {
       <button id="viewWeek" class="${!isDayView ? "active" : ""}">Week</button>
       <button id="viewDay" class="${isDayView ? "active" : ""}">Day</button>
     </div>
-    ${isDayView ? `<div class="weekbar" id="weekbar"></div>${renderFilterBar()}` : ""}
+    ${isDayView ? `<div class="weekbar" id="weekbar"></div>${renderFilterBar()}` : `<div id="wg-filter-role"></div><div id="wg-filter-level"></div>`}
     <div id="dayBody"><div class="spinner"></div></div>`;
 
   $("#prevWk").onclick = () => { State.weekStart = addDays(State.weekStart, -7); State.selectedDate = toISO(State.weekStart); viewCalendar(); };
@@ -586,12 +612,42 @@ async function viewCalendar() {
       renderDayBody(slots);
     } catch (err) { $("#dayBody").innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; }
   } else {
-    // week view
+    // week view — fetch slots then render filters + grid
     try {
       const weekSlots = await api(`/api/slots/week?date=${State.selectedDate}`);
+      State._cachedWeekSlots = weekSlots;
+      renderWeekFilters(weekSlots);
       renderWeekGrid(weekSlots);
     } catch (err) { $("#dayBody").innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; }
   }
+}
+
+function renderWeekFilters(allSlots) {
+  const rfEl = $("#wg-filter-role");
+  const lfEl = $("#wg-filter-level");
+  if (!rfEl) return;
+
+  rfEl.innerHTML = renderFilterBar();
+  lfEl.innerHTML = renderLevelFilterBar(allSlots);
+
+  // role chips
+  rfEl.querySelectorAll(".filterchip[data-fid]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const v = b.dataset.fid;
+      State.calendarFilter = v === "all" ? "all" : v === "null" ? null : Number(v);
+      State.calendarLevelFilter = null; // reset level filter on role change
+      renderWeekFilters(State._cachedWeekSlots || []);
+      renderWeekGrid(State._cachedWeekSlots || []);
+    }));
+
+  // level chips
+  lfEl.querySelectorAll(".filterchip[data-lvl]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const v = b.dataset.lvl;
+      State.calendarLevelFilter = v === "" ? null : v === "duty" ? "duty" : Number(v);
+      renderWeekFilters(State._cachedWeekSlots || []);
+      renderWeekGrid(State._cachedWeekSlots || []);
+    }));
 }
 
 // ------------------------------------------------------------------ WEEK TIMETABLE GRID
@@ -1281,12 +1337,33 @@ async function rotaBuilder() {
   // Filter to active role (or all)
   const roleSlots = isAllView ? weekSlots : weekSlots.filter((s) => s.role_id === State.rotaRole);
 
+  // Level filter (null = all, "duty" = pool duty, number = level_id)
+  if (State._rotaLevelFilter === undefined) State._rotaLevelFilter = null;
+  const gridSlots = State._rotaLevelFilter === "duty"
+    ? roleSlots.filter((s) => !s.level_id)
+    : State._rotaLevelFilter
+    ? roleSlots.filter((s) => s.level_id === State._rotaLevelFilter)
+    : roleSlots;
+
   // All active staff (All view) or just those qualified for the selected role
   const qualified = isAllView
     ? users.filter((u) => u.active !== false)
     : users.filter((u) => u.active !== false && u.roles.some((r) => r.id === State.rotaRole));
 
-  const times = [...new Set(roleSlots.map((s) => s.start_time))].sort();
+  // Build level filter chips from unique levels in roleSlots
+  const hasDuty = roleSlots.some((s) => !s.level_id);
+  const levelsInSlots = [...new Map(roleSlots.filter((s) => s.level_id).map((s) => [s.level_id, { id: s.level_id, name: s.level_name }])).values()]
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  const levelChipsHtml = (hasDuty || levelsInSlots.length) ? [
+    `<button class="filterchip${!State._rotaLevelFilter ? " active" : ""}" data-rlevel="">All</button>`,
+    ...(hasDuty ? [`<button class="filterchip${State._rotaLevelFilter === "duty" ? " active" : ""}" data-rlevel="duty">🛟 Pool duty</button>`] : []),
+    ...levelsInSlots.map((l) => {
+      const code = (l.name || "").replace("Parents & Toddlers", "P&T").replace("Level ", "L");
+      return `<button class="filterchip${State._rotaLevelFilter === l.id ? " active" : ""}" data-rlevel="${l.id}">${esc(code)}</button>`;
+    }),
+  ].join("") : "";
+
+  const times = [...new Set(gridSlots.map((s) => s.start_time))].sort();
 
   // Role tab badge: lifeguard → 🛟, others → shortcode or first letter
   function roleTabBadge(r) {
@@ -1304,7 +1381,8 @@ async function rotaBuilder() {
 
   mb.innerHTML = `
     <p class="small muted">Pick a person, then tick the slots you want to assign them to.${isAllView ? " Unqualified slots will be skipped with a reason." : " Assignments are approved immediately."}</p>
-    <div class="filterbar" style="margin-bottom:10px">${roleTabsHtml}</div>
+    <div class="filterbar" style="margin-bottom:4px">${roleTabsHtml}</div>
+    ${levelChipsHtml ? `<div class="filterbar" style="margin-bottom:10px">${levelChipsHtml}</div>` : ""}
 
     <div class="card" style="margin-bottom:12px">
       <div class="between">
@@ -1324,7 +1402,7 @@ async function rotaBuilder() {
     </div>
 
     <div id="rb-grid">
-      ${times.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(roleSlots, times, State._rotaWeekStart, isAllView, State.roles)}
+      ${times.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(gridSlots, times, State._rotaWeekStart, isAllView, State.roles)}
     </div>
 
     <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
@@ -1333,8 +1411,39 @@ async function rotaBuilder() {
       <span class="small muted" id="rb-selcount" style="align-self:center"></span>
     </div>`;
 
+  // Level filter chips
+  mb.querySelectorAll("[data-rlevel]").forEach((b) => b.addEventListener("click", () => {
+    const v = b.dataset.rlevel;
+    State._rotaLevelFilter = v === "" ? null : v === "duty" ? "duty" : Number(v);
+    mb.querySelectorAll("[data-rlevel]").forEach((x) =>
+      x.classList.toggle("active", x.dataset.rlevel === (State._rotaLevelFilter === null ? "" : String(State._rotaLevelFilter))));
+    // Rebuild grid with new filter without full re-render
+    const filtered = State._rotaLevelFilter === "duty"
+      ? roleSlots.filter((s) => !s.level_id)
+      : State._rotaLevelFilter
+      ? roleSlots.filter((s) => s.level_id === State._rotaLevelFilter)
+      : roleSlots;
+    const newTimes = [...new Set(filtered.map((s) => s.start_time))].sort();
+    document.getElementById("rb-grid").innerHTML =
+      newTimes.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(filtered, newTimes, State._rotaWeekStart, isAllView, State.roles);
+    bindWeekGrid ? null : null; // re-bind cell click handlers
+    mb.querySelectorAll(".rb-cell[data-sid]").forEach((cell) =>
+      cell.addEventListener("click", () => {
+        if (cell.dataset.taken) {
+          const slot = roleSlots.find((s) => s.id === Number(cell.dataset.sid));
+          if (slot) showSlotRemoveSheet(slot);
+          return;
+        }
+        cell.classList.toggle("rb-sel");
+        updateRotaCount();
+      }));
+    mb.querySelectorAll("[data-wg-expand]").forEach((btn) =>
+      btn.addEventListener("click", (e) => { e.stopPropagation(); btn.nextElementSibling.style.display = ""; btn.remove(); }));
+  }));
+
   // Role tab switching
   mb.querySelectorAll("[data-rtab]").forEach((b) => b.addEventListener("click", () => {
+    State._rotaLevelFilter = null; // reset level filter on role change
     State.rotaRole = Number(b.dataset.rtab) || null; rotaBuilder();
   }));
 
