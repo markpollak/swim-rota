@@ -66,13 +66,15 @@ ssh root@165.232.96.67 "cd swim-rota && docker compose ps"
 
 ## Standard deploy workflow
 
+**Always deploy to the live droplet after every change — do not skip this step.**
+
 1. Make changes locally and test at http://localhost:8080
 2. **Bump the service worker cache version** (see below — MUST do this for every static file change)
 3. Commit and push:
    ```bash
    git add <files> && git commit -m "..." && git push origin master
    ```
-4. Deploy to droplet:
+4. Deploy to droplet (always do this):
    ```bash
    ssh root@165.232.96.67 "cd swim-rota && git pull && docker compose build app && docker compose up -d"
    ```
