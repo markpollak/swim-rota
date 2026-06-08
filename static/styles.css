@@ -372,7 +372,7 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 .rg-open:hover, .rg-open.rb-sel { background: var(--blue); color: #fff; border-style: solid; }
 .rb-sel { background: var(--blue) !important; color: #fff !important; border-color: var(--blue) !important; }
 .rg-taken-ok { background: var(--green-soft); color: var(--green); border: 1.5px solid var(--green); cursor: default; }
-.rg-taken-pending { background: var(--amber-soft); color: var(--amber); border: 1.5px solid var(--amber); cursor: default; }
+.rg-taken-pending { background: var(--red-soft); color: var(--red); border: 1.5px dashed var(--red); cursor: default; }
 .rg-past { background: #f5f5f5; color: #bbb; border: 1.5px dashed #ddd; cursor: not-allowed; }
 .rg-lvl { font-weight:900; font-size:.72rem; opacity:.85; }
 /* role shortcode badges — on rota tabs and inside all-view cells */
