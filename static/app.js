@@ -889,7 +889,10 @@ async function adminApprovals() {
       const fn = s.assigned_name?.split(" ")[0] || s.assigned_name;
       const lvl = s.level_name ? s.level_name.replace("Parents & Toddlers", "P&T").replace("Level ", "L") : "Pool duty";
       const dateStr = fmtDate(s.date).replace(/\s\d{4}/, "");
-      return `<div class="appr-row">
+      const clashBanner = s.clash
+        ? `<div class="appr-clash">⚠ Can't approve — already working as ${esc(s.clash)}</div>`
+        : "";
+      return `<div class="appr-row${s.clash ? " appr-row-clash" : ""}">
         <span class="appr-dot" style="background:${roleColor(s.role_id)}"></span>
         <div class="appr-info">
           <span class="appr-name">${esc(fn)}</span>
@@ -898,9 +901,10 @@ async function adminApprovals() {
           <span>${esc(lvl)}</span>
           <span class="appr-sep">·</span>
           <span class="appr-time">${dateStr} ${s.start_time}</span>
+          ${clashBanner}
         </div>
         <div class="appr-btns">
-          <button class="btn green sm" data-approve="${s.id}" title="Approve">✓</button>
+          <button class="btn green sm" data-approve="${s.id}" title="Approve"${s.clash ? " disabled" : ""}>✓</button>
           <button class="btn danger sm" data-reject="${s.id}" title="Decline">✗</button>
         </div>
       </div>`;

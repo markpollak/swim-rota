@@ -218,7 +218,25 @@ def list_slots(request: Request, user=Depends(current_user)):
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY s.date, s.start_time, r.sort_order"
     with db.get_db() as conn:
-        return db.dict_rows(conn.execute(sql, params).fetchall())
+        rows = db.dict_rows(conn.execute(sql, params).fetchall())
+        if q.get("pending"):
+            for row in rows:
+                uid = row.get("assigned_user_id")
+                if not uid:
+                    continue
+                clash = conn.execute("""
+                    SELECT s2.start_time, s2.end_time, l.name level_name, r.name role_name
+                    FROM slots s2
+                    LEFT JOIN levels l ON l.id = s2.level_id
+                    JOIN roles r ON r.id = s2.role_id
+                    WHERE s2.assigned_user_id = ? AND s2.date = ?
+                    AND s2.status = 'approved' AND s2.id != ?
+                    AND s2.start_time < ? AND ? < s2.end_time
+                """, (uid, row["date"], row["id"], row["end_time"], row["start_time"])).fetchone()
+                if clash:
+                    lvl = clash["level_name"] or "pool duty"
+                    row["clash"] = f"{clash['role_name']}: {lvl}, {clash['start_time']}–{clash['end_time']}"
+        return rows
 
 
 def _get_slot(conn, slot_id):
