@@ -427,7 +427,7 @@ function shiftBadge(s) {
 function shiftChip(s, future) {
   const pending = s.status === "requested";
   const isDuty  = !s.level_id;
-  const cls     = `ms-row ${isDuty ? "ms-lg" : pending ? "ms-pending" : "ms-ok"}`;
+  const cls     = `ms-row ${pending ? "ms-pending" : "ms-ok"}`;
   const st      = pending ? `<span class="ms-st">⏳</span>` : `<span class="ms-st">✓</span>`;
   const rel     = future ? `<button class="ms-x" data-rel="${s.id}" title="Release shift">×</button>` : "";
   const ttip    = `${esc(isDuty ? "Pool Lifeguard" : s.level_name || "")} · ${s.start_time}${pending ? " · pending" : " · approved"}`;
