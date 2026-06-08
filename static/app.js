@@ -1181,9 +1181,10 @@ async function rotaBuilder() {
   // Filter to active role (or all)
   const roleSlots = isAllView ? weekSlots : weekSlots.filter((s) => s.role_id === State.rotaRole);
 
-  // Qualified staff for this role (hidden in All view)
-  const qualified = isAllView ? [] : users.filter((u) =>
-    u.active !== false && u.roles.some((r) => r.id === State.rotaRole));
+  // All active staff (All view) or just those qualified for the selected role
+  const qualified = isAllView
+    ? users.filter((u) => u.active !== false)
+    : users.filter((u) => u.active !== false && u.roles.some((r) => r.id === State.rotaRole));
 
   const times = [...new Set(roleSlots.map((s) => s.start_time))].sort();
 
@@ -1202,10 +1203,10 @@ async function rotaBuilder() {
   ].join("");
 
   mb.innerHTML = `
-    <p class="small muted">${isAllView ? "Overview of all roles for the week." : "Pick a person, then tick the slots you want to assign them to. Assignments are approved immediately."}</p>
+    <p class="small muted">Pick a person, then tick the slots you want to assign them to.${isAllView ? " Unqualified slots will be skipped with a reason." : " Assignments are approved immediately."}</p>
     <div class="filterbar" style="margin-bottom:10px">${roleTabsHtml}</div>
 
-    ${isAllView ? "" : `<div class="card" style="margin-bottom:12px">
+    <div class="card" style="margin-bottom:12px">
       <div class="between">
         <div class="field" style="margin:0;flex:1">
           <label>Assign to</label>
@@ -1220,23 +1221,17 @@ async function rotaBuilder() {
           <button class="btn sub sm" id="rb-next">›</button>
         </div>
       </div>
-    </div>`}
-
-    ${isAllView ? `<div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
-      <button class="btn sub sm" id="rb-prev">‹</button>
-      <span class="small" style="white-space:nowrap">${fmtDate(weekISO).slice(4)}–${fmtDate(weekEnd).slice(4)}</span>
-      <button class="btn sub sm" id="rb-next">›</button>
-    </div>` : ""}
+    </div>
 
     <div id="rb-grid">
       ${times.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(roleSlots, times, State._rotaWeekStart, isAllView, State.roles)}
     </div>
 
-    ${isAllView ? "" : `<div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn green" id="rb-apply" disabled>Assign selected slots</button>
       <button class="btn ghost sm" id="rb-clearsel">Clear selection</button>
       <span class="small muted" id="rb-selcount" style="align-self:center"></span>
-    </div>`}`;
+    </div>`;
 
   // Role tab switching
   mb.querySelectorAll("[data-rtab]").forEach((b) => b.addEventListener("click", () => {
