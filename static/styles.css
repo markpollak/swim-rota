@@ -471,16 +471,16 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
   border:1.5px solid transparent; overflow:hidden;
 }
 .ms-row.ms-ok      { background:var(--green-soft);  border-color:#bce6cd; }
-.ms-row.ms-pending { background:var(--amber-soft);  border-color:#f0d49a; }
+.ms-row.ms-pending { background:var(--red-soft); border:1.5px dashed var(--red); }
 .ms-row.ms-lg      { background:var(--red-soft); border-color:#f0bcbc; }
 .ms-t  { font-size:.57rem; font-weight:800; color:var(--ink); white-space:nowrap; flex-shrink:0; }
 .ms-lv { font-size:.68rem; font-weight:900; flex-shrink:0; }
 .ms-row.ms-ok      .ms-lv { color:var(--green); }
-.ms-row.ms-pending .ms-lv { color:var(--amber); }
+.ms-row.ms-pending .ms-lv { color:var(--red); }
 .ms-row.ms-lg      .ms-lv { color:var(--red); }
 .ms-st { font-size:.65rem; line-height:1; margin-left:auto; flex-shrink:0; }
 .ms-row.ms-ok      .ms-st { color:var(--green); }
-.ms-row.ms-pending .ms-st { color:var(--amber); }
+.ms-row.ms-pending .ms-st { color:var(--red); }
 .ms-row.ms-lg      .ms-st { color:var(--red); }
 
 /* red life-ring emoji = lifeguard duty */

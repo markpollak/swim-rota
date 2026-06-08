@@ -511,9 +511,9 @@ function renderFilterBar() {
         style="${active ? `background:${r.color};border-color:${r.color}` : `border-color:${r.color};color:${r.color}`}">
         ${esc(r.name)}</button>`;
   });
-  // "All" chip: for non-admins shows everything; for admins it's the default
+  // "All" chip: for non-admins shows everything; for admins it's the default — always first
   const allActive = f === "all" || (u.is_admin && f === null);
-  chips.push(`<button class="filterchip${allActive ? " active" : ""}" data-fid="all">All roles</button>`);
+  chips.unshift(`<button class="filterchip${allActive ? " active" : ""}" data-fid="all">All roles</button>`);
   // For non-admins also offer "My roles" (null default) chip when >1 role
   if (!u.is_admin && u.roles.length > 1) {
     const myActive = f === null;
