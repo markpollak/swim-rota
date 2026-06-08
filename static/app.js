@@ -2372,8 +2372,8 @@ async function adminChannels() {
       return `
       <div class="card" style="margin-bottom:10px;border-left:4px solid ${ch.color}">
         <div class="between">
-          <div><strong>${esc(ch.name)}</strong>
-            <div class="small muted">${ch.member_count} members${linkedRole ? ` · <span style="color:${linkedRole.color}">⚙ ${esc(linkedRole.name)}</span>` : ""}${ch.description ? " · " + esc(ch.description) : ""}</div>
+          <div><strong>${esc(ch.name)}${ch.is_system ? " 🔒" : ""}</strong>
+            <div class="small muted">${ch.member_count} members${ch.is_system ? " · All staff always included" : ""}${linkedRole ? ` · <span style="color:${linkedRole.color}">⚙ ${esc(linkedRole.name)}</span>` : ""}${ch.description ? " · " + esc(ch.description) : ""}</div>
           </div>
           <button class="btn sub sm" data-edit-ch="${ch.id}">Edit</button>
         </div>
@@ -2401,23 +2401,30 @@ async function channelSheet(ch, allUsers) {
       ${viaRoleIds.has(u.id) ? `<span class="pill small" style="font-size:.65rem;padding:1px 6px;margin-left:4px">auto</span>` : ""}
     </label>`).join("");
 
+  const isSystem = !isNew && ch.is_system;
   const roleOpts = `<option value="">None (manual members only)</option>` +
     State.roles.map((r) => `<option value="${r.id}" ${ch?.role_id === r.id ? "selected" : ""}>${esc(r.name)}</option>`).join("");
 
+  const membersSection = isSystem
+    ? `<div class="banner" style="background:var(--blue-soft);color:var(--blue);border-radius:8px;padding:10px 14px;font-size:.85rem">
+        🔒 All active staff are always members of this channel. Members cannot be removed manually.
+       </div>`
+    : `<div class="field"><label>Additional members</label><div id="cs-members" class="stack">${userChecks}</div></div>`;
+
   const sheet = openSheet(`
-    <h2>${isNew ? "New channel" : "Edit: " + esc(ch.name)}</h2>
+    <h2>${isNew ? "New channel" : "Edit: " + esc(ch.name)}${isSystem ? " 🔒" : ""}</h2>
     <div class="stack" style="margin-top:14px">
-      <div class="field"><label>Channel name</label><input id="cs-name" value="${esc(ch?.name||"")}" placeholder="e.g. Lifeguards"/></div>
+      <div class="field"><label>Channel name</label><input id="cs-name" value="${esc(ch?.name||"")}" placeholder="e.g. Lifeguards"${isSystem ? " readonly" : ""}/></div>
       <div class="field"><label>Description (optional)</label><input id="cs-desc" value="${esc(ch?.description||"")}" placeholder="What this channel is for"/></div>
       <div class="field"><label>Colour</label><input id="cs-color" type="color" value="${ch?.color||"#26358B"}" style="height:48px;padding:4px"/></div>
-      <div class="field">
+      ${!isSystem ? `<div class="field">
         <label>Linked role</label>
         <select id="cs-role-link">${roleOpts}</select>
         <p class="small muted" style="margin-top:4px">Users get added/removed from this channel automatically when the role is assigned or removed.</p>
-      </div>
-      <div class="field"><label>Additional members</label><div id="cs-members" class="stack">${userChecks}</div></div>
+      </div>` : ""}
+      ${membersSection}
       <button class="btn block" id="cs-save">${isNew ? "Create channel" : "Save changes"}</button>
-      ${!isNew ? `<button class="btn danger block" id="cs-del" style="margin-top:6px">Delete channel</button>` : ""}
+      ${!isNew && !isSystem ? `<button class="btn danger block" id="cs-del" style="margin-top:6px">Delete channel</button>` : ""}
     </div>`);
 
   sheet.querySelectorAll(".checkrow input[type=checkbox]").forEach((cb) =>

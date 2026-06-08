@@ -52,12 +52,25 @@ def ensure_dm_channels(conn):
             )
 
 
+def ensure_system_channels(conn):
+    """Add every active user to every system channel (idempotent)."""
+    sys_chs = conn.execute(
+        "SELECT id FROM channels WHERE is_system=1 AND active=1").fetchall()
+    users = conn.execute("SELECT id FROM users WHERE active=1").fetchall()
+    for ch in sys_chs:
+        for u in users:
+            conn.execute(
+                "INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at, via_role) VALUES (?,?,?,0)",
+                (ch["id"], u["id"], now_iso()))
+
+
 @app.on_event("startup")
 def _startup():
     db.init_db()
     with db.get_db() as conn:
         extend_to_horizon(conn)
         ensure_dm_channels(conn)
+        ensure_system_channels(conn)
 
 
 def now_iso():
@@ -558,8 +571,9 @@ async def create_user(request: Request, admin=Depends(require_admin)):
             conn.execute("INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?,?)", (uid, rid))
             _sync_role_channel_add(conn, uid, rid)
         _audit(conn, admin["id"], "users", "user_create", b["full_name"])
-        # Auto-create DM channel for the new user
+        # Auto-create DM channel and add to system channels
         ensure_dm_channels(conn)
+        ensure_system_channels(conn)
         return {"ok": True, "id": uid}
 
 
@@ -1053,12 +1067,13 @@ def _channel_payload(conn, ch, requesting_uid=None):
             display_name = dm_user["full_name"] if dm_user else ch["name"]
 
     role_id = ch["role_id"] if "role_id" in ch.keys() else None
+    is_system = bool(ch["is_system"]) if "is_system" in ch.keys() else False
     return {
         "id": ch["id"], "name": display_name, "description": ch["description"],
         "color": ch["color"], "member_count": count,
         "last_message": dict(last) if last else None,
         "unread": unread, "type": ch_type, "dm_user_id": dm_user_id,
-        "role_id": role_id,
+        "role_id": role_id, "is_system": is_system,
     }
 
 
@@ -1136,26 +1151,35 @@ async def update_channel(cid: int, request: Request, admin=Depends(require_admin
             params.append(cid)
             conn.execute(f"UPDATE channels SET {','.join(fields)} WHERE id=?", params)
 
+        ch_row = conn.execute("SELECT name, is_system FROM channels WHERE id=?", (cid,)).fetchone()
         if "member_ids" in b:
             new_ids = set(b["member_ids"])
-            existing = conn.execute("SELECT user_id FROM channel_members WHERE channel_id=?", (cid,)).fetchall()
-            for row in existing:
-                if row["user_id"] not in new_ids:
-                    conn.execute("DELETE FROM channel_members WHERE channel_id=? AND user_id=?",
-                                 (cid, row["user_id"]))
-            for uid in new_ids:
-                conn.execute(
-                    "INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at, via_role) VALUES (?,?,?,0)",
-                    (cid, uid, now_iso()))
-        ch = conn.execute("SELECT name FROM channels WHERE id=?", (cid,)).fetchone()
-        _audit(conn, admin["id"], "channels", "channel_update", ch["name"] if ch else str(cid))
+            # System channels: only add members, never remove
+            if ch_row and ch_row["is_system"]:
+                for uid in new_ids:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at, via_role) VALUES (?,?,?,0)",
+                        (cid, uid, now_iso()))
+            else:
+                existing = conn.execute("SELECT user_id FROM channel_members WHERE channel_id=?", (cid,)).fetchall()
+                for row in existing:
+                    if row["user_id"] not in new_ids:
+                        conn.execute("DELETE FROM channel_members WHERE channel_id=? AND user_id=?",
+                                     (cid, row["user_id"]))
+                for uid in new_ids:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO channel_members (channel_id, user_id, joined_at, via_role) VALUES (?,?,?,0)",
+                        (cid, uid, now_iso()))
+        _audit(conn, admin["id"], "channels", "channel_update", ch_row["name"] if ch_row else str(cid))
         return {"ok": True}
 
 
 @app.delete("/api/channels/{cid}")
 def delete_channel(cid: int, admin=Depends(require_admin)):
     with db.get_db() as conn:
-        ch = conn.execute("SELECT name FROM channels WHERE id=?", (cid,)).fetchone()
+        ch = conn.execute("SELECT name, is_system FROM channels WHERE id=?", (cid,)).fetchone()
+        if ch and ch["is_system"]:
+            raise HTTPException(400, "System channels cannot be deleted.")
         conn.execute("UPDATE channels SET active=0 WHERE id=?", (cid,))
         _audit(conn, admin["id"], "channels", "channel_delete", ch["name"] if ch else str(cid))
         return {"ok": True}
