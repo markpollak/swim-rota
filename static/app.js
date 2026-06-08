@@ -1779,8 +1779,9 @@ async function rotaBuilder() {
 
   // Delete apply button
   const delBtn = document.getElementById("rb-delete-apply");
-  if (delBtn) delBtn.addEventListener("click", () => {
-    const ids = [...mb.querySelectorAll(".rb-del-sel[data-sid]")].map((c) => Number(c.dataset.sid));
+  if (delBtn) delBtn.addEventListener("click", (evt) => {
+    evt.stopPropagation();
+    const ids = [...document.querySelectorAll(".rb-del-sel[data-sid]")].map((c) => Number(c.dataset.sid));
     if (!ids.length) return;
     openSheet(`
       <h2 style="margin-bottom:12px">Delete ${ids.length} shift${ids.length !== 1 ? "s" : ""}?</h2>
