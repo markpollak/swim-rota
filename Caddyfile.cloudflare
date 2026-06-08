@@ -12,7 +12,7 @@
 cmwebstats.com, www.cmwebstats.com {
 	encode gzip
 
-	tls /etc/caddy/certs/cmwebstats.pem /etc/caddy/certs/cmwebstats.key
+	tls /etc/caddy/certs/cert.pem /etc/caddy/certs/cert.key
 
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
