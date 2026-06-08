@@ -324,6 +324,7 @@ FROM slots s
 JOIN roles r ON r.id = s.role_id
 LEFT JOIN levels l ON l.id = s.level_id
 LEFT JOIN users u ON u.id = s.assigned_user_id
+WHERE s.deleted_at IS NULL
 """
 
 
@@ -378,7 +379,7 @@ def list_slots(request: Request, user=Depends(current_user)):
         where.append("s.status = 'requested'")
     sql = SLOT_SELECT
     if where:
-        sql += " WHERE " + " AND ".join(where)
+        sql += " AND " + " AND ".join(where)
     sql += " ORDER BY s.date, s.start_time, r.sort_order"
     with db.get_db() as conn:
         rows = db.dict_rows(conn.execute(sql, params).fetchall())
@@ -601,13 +602,36 @@ async def create_slot(request: Request, admin=Depends(require_admin)):
 @app.delete("/api/slots/{slot_id}")
 def delete_slot(slot_id: int, admin=Depends(require_admin)):
     with db.get_db() as conn:
-        s = _get_slot(conn, slot_id)
-        conn.execute("DELETE FROM slots WHERE id = ?", (slot_id,))
-        if s["assigned_user_id"]:
-            notify_user(conn, s["assigned_user_id"],
-                        f"A shift you held ({s['date']} {s['start_time']}) was removed by an administrator.")
+        s = conn.execute("SELECT * FROM slots WHERE id=?", (slot_id,)).fetchone()
+        if not s:
+            raise HTTPException(404, "Slot not found")
+        if s["status"] != "open":
+            raise HTTPException(400, "Only open shifts can be deleted — remove the assigned person first")
+        conn.execute("UPDATE slots SET deleted_at=?, deleted_by=? WHERE id=?",
+                     (now_iso(), admin["id"], slot_id))
         _audit(conn, admin["id"], "shifts", "slot_delete", _slot_desc(dict(s)))
         return {"ok": True}
+
+
+@app.post("/api/slots/bulk-delete")
+async def bulk_delete_slots(request: Request, admin=Depends(require_admin)):
+    b = await request.json()
+    ids = b.get("slot_ids", [])
+    if not ids:
+        raise HTTPException(400, "No slot_ids provided")
+    with db.get_db() as conn:
+        deleted = 0
+        skipped = []
+        for slot_id in ids:
+            s = conn.execute("SELECT * FROM slots WHERE id=?", (slot_id,)).fetchone()
+            if not s or s["status"] != "open" or s["deleted_at"]:
+                skipped.append(slot_id)
+                continue
+            conn.execute("UPDATE slots SET deleted_at=?, deleted_by=? WHERE id=?",
+                         (now_iso(), admin["id"], slot_id))
+            _audit(conn, admin["id"], "shifts", "slot_delete", _slot_desc(dict(s)))
+            deleted += 1
+        return {"deleted": deleted, "skipped": len(skipped)}
 
 
 async def _has_body(request: Request) -> bool:
@@ -701,7 +725,7 @@ def slots_week(request: Request, user=Depends(current_user)):
     sunday = monday + timedelta(days=6)
     with db.get_db() as conn:
         rows = conn.execute(f"""{SLOT_SELECT}
-            WHERE s.date >= ? AND s.date <= ?
+            AND s.date >= ? AND s.date <= ?
             ORDER BY s.date, s.start_time, r.sort_order""",
             (monday.isoformat(), sunday.isoformat())).fetchall()
         return db.dict_rows(rows)
@@ -1042,7 +1066,7 @@ async def set_level_schedule(level_ref: str, request: Request, admin=Depends(req
 # ----------------------------------------------------------------------------
 def _outstanding_rows(conn, frm, to):
     return conn.execute(f"""{SLOT_SELECT}
-        WHERE s.status != 'approved' AND s.date >= ? AND s.date <= ?
+        AND s.status != 'approved' AND s.date >= ? AND s.date <= ?
         ORDER BY s.date, s.start_time""", (frm, to)).fetchall()
 
 

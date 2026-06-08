@@ -1568,39 +1568,53 @@ async function rotaBuilder() {
         style="${r.id === State.rotaRole ? `background:${r.color};border-color:${r.color}` : `border-color:${r.color};color:${r.color}`}">${roleTabBadge(r)} ${esc(r.name)}</button>`),
   ].join("");
 
+  const deleteMode = !!State._rotaDeleteMode;
   mb.innerHTML = `
-    <p class="small muted">Pick a person, then tick the slots you want to assign them to.${isAllView ? " Unqualified slots will be skipped with a reason." : " Assignments are approved immediately."}</p>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <div class="rb-mode-toggle">
+        <button class="rb-mode-btn${!deleteMode ? " rbt-assign" : ""}" data-mode="assign">📋 Assign Shifts</button>
+        <button class="rb-mode-btn${deleteMode ? " rbt-delete" : ""}" data-mode="delete">🗑 Delete Shifts</button>
+      </div>
+    </div>
     <div class="filterbar" style="margin-bottom:4px">${roleTabsHtml}</div>
     ${levelChipsHtml ? `<div class="filterbar" style="margin-bottom:10px">${levelChipsHtml}</div>` : ""}
 
     <div class="card rb-controls" style="margin-bottom:12px">
-      <div class="between">
-        <div class="field" style="margin:0;flex:1">
+      <div class="between" style="flex-wrap:wrap;gap:8px">
+        ${!deleteMode ? `
+        <div class="field" style="margin:0;flex:1;min-width:160px">
           <label>Assign to</label>
           <select id="rb-person">
             <option value="">— choose a person —</option>
             ${qualified.map((u) => `<option value="${u.id}">${esc(u.full_name)}</option>`).join("")}
           </select>
-        </div>
-        <div style="display:flex;gap:6px;align-items:flex-end;padding-bottom:0;flex-wrap:wrap">
+        </div>` : `<div class="small muted" style="flex:1;align-self:center">Click open (blue) shifts to select them. Red and green shifts must have their person removed first.</div>`}
+        <div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap">
           <button class="btn sub sm" id="rb-prev">‹</button>
           <span class="small" style="white-space:nowrap;padding:0 4px">${fmtDate(weekISO).slice(4)}–${fmtDate(weekEnd).slice(4)}</span>
           <button class="btn sub sm" id="rb-next">›</button>
-          <button class="btn sub sm${State._rotaWidescreen ? " rb-wide-active" : ""}" id="rb-wide" title="Expand to 95% browser width — shows full staff names">⊞ Wide</button>
-          <button class="btn sub sm" id="rb-print" title="Print this rota as PDF">🖨 Print</button>
+          <button class="btn sub sm${State._rotaWidescreen ? " rb-wide-active" : ""}" id="rb-wide" title="Expand to full browser width — shows full names">⊞ Wide</button>
+          <button class="btn sub sm" id="rb-print" title="Print rota as PDF">🖨 Print</button>
         </div>
       </div>
     </div>
 
     <div id="rb-grid">
-      ${times.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(gridSlots, times, State._rotaWeekStart, isAllView, State.roles, State._rotaWidescreen)}
+      ${times.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(gridSlots, times, State._rotaWeekStart, isAllView, State.roles, State._rotaWidescreen, deleteMode)}
     </div>
 
+    ${!deleteMode ? `
     <div class="rb-controls" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn green" id="rb-apply" disabled>Assign selected slots</button>
       <button class="btn ghost sm" id="rb-clearsel">Clear selection</button>
       <span class="small muted" id="rb-selcount" style="align-self:center"></span>
-    </div>`;
+    </div>` : `
+    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn danger" id="rb-delete-apply" disabled>Delete 0 shifts</button>
+      <button class="btn ghost sm" id="rb-clearsel">Clear selection</button>
+      <span class="small muted" id="rb-selcount" style="align-self:center"></span>
+    </div>`}
+  `;
 
   // Level filter chips
   mb.querySelectorAll("[data-rlevel]").forEach((b) => b.addEventListener("click", () => {
@@ -1616,7 +1630,7 @@ async function rotaBuilder() {
       : roleSlots;
     const newTimes = [...new Set(filtered.map((s) => s.start_time))].sort();
     document.getElementById("rb-grid").innerHTML =
-      newTimes.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(filtered, newTimes, State._rotaWeekStart, isAllView, State.roles, State._rotaWidescreen);
+      newTimes.length === 0 ? `<div class="empty">No slots this week.</div>` : buildRotaGrid(filtered, newTimes, State._rotaWeekStart, isAllView, State.roles, State._rotaWidescreen, !!State._rotaDeleteMode);
     bindWeekGrid ? null : null; // re-bind cell click handlers
     mb.querySelectorAll(".rb-cell[data-sid]").forEach((cell) =>
       cell.addEventListener("click", () => {
@@ -1645,12 +1659,25 @@ async function rotaBuilder() {
   $("#rb-wide").addEventListener("click", () => { State._rotaWidescreen = !State._rotaWidescreen; rotaBuilder(); });
   $("#rb-print").addEventListener("click", () => window.print());
 
+  // Mode toggle (assign / delete)
+  mb.querySelectorAll(".rb-mode-btn[data-mode]").forEach((b) => b.addEventListener("click", () => {
+    State._rotaDeleteMode = b.dataset.mode === "delete";
+    rotaBuilder();
+  }));
+
   // Person change — refresh grid to highlight their existing assignments
-  $("#rb-person").addEventListener("change", () => refreshRotaGrid(roleSlots, times, State._rotaWeekStart));
+  if ($("#rb-person")) $("#rb-person").addEventListener("change", () => refreshRotaGrid(roleSlots, times, State._rotaWeekStart));
 
   // Cell toggle / admin removal or approval
   mb.querySelectorAll(".rb-cell[data-sid]").forEach((cell) =>
     cell.addEventListener("click", () => {
+      if (deleteMode) {
+        // Delete mode: only open (blue) cells are selectable
+        if (cell.dataset.taken) return; // red/green — ignore click
+        cell.classList.toggle("rb-del-sel");
+        updateRotaCount();
+        return;
+      }
       if (cell.dataset.taken) {
         const slot = roleSlots.find((s) => s.id === Number(cell.dataset.sid));
         if (!slot) return;
@@ -1694,13 +1721,37 @@ async function rotaBuilder() {
     } catch (err) { toast(err.message, "err"); btn.disabled = false; btn.textContent = "Assign selected slots"; }
   });
 
+  // Delete apply button
+  const delBtn = document.getElementById("rb-delete-apply");
+  if (delBtn) delBtn.addEventListener("click", () => {
+    const ids = [...mb.querySelectorAll(".rb-del-sel[data-sid]")].map((c) => Number(c.dataset.sid));
+    if (!ids.length) return;
+    openSheet(`
+      <h2 style="margin-bottom:12px">Delete ${ids.length} shift${ids.length !== 1 ? "s" : ""}?</h2>
+      <p class="small muted">These open shifts will be removed from the rota. This can't be undone.</p>
+      <div style="margin-top:18px;display:flex;gap:10px">
+        <button class="btn danger" id="rbd-confirm">Yes, delete</button>
+        <button class="btn ghost" id="rbd-cancel">Cancel</button>
+      </div>`);
+    document.getElementById("rbd-confirm").addEventListener("click", async (e) => {
+      e.target.disabled = true; e.target.textContent = "Deleting…";
+      try {
+        const r = await api("/api/slots/bulk-delete", { method: "POST", body: { slot_ids: ids } });
+        closeSheet();
+        toast(`Deleted ${r.deleted} shift${r.deleted !== 1 ? "s" : ""}`, "ok");
+        rotaBuilder();
+      } catch (err) { toast(err.message, "err"); e.target.disabled = false; e.target.textContent = "Yes, delete"; }
+    });
+    document.getElementById("rbd-cancel").addEventListener("click", closeSheet);
+  });
+
   $("#rb-clearsel").addEventListener("click", () => {
-    mb.querySelectorAll(".rb-sel").forEach((c) => c.classList.remove("rb-sel"));
+    mb.querySelectorAll(".rb-sel, .rb-del-sel").forEach((c) => c.classList.remove("rb-sel", "rb-del-sel"));
     updateRotaCount();
   });
 }
 
-function buildRotaGrid(roleSlots, times, weekStart, allView = false, allRoles = [], widescreen = false) {
+function buildRotaGrid(roleSlots, times, weekStart, allView = false, allRoles = [], widescreen = false, deleteMode = false) {
   const today = isoToday();
   const DAYS_SHORT = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
   const days = Array.from({length: 7}, (_, i) => {
@@ -1737,7 +1788,7 @@ function buildRotaGrid(roleSlots, times, weekStart, allView = false, allRoles = 
         const name = s.assigned_name
           ? (widescreen ? s.assigned_name : (s.assigned_display_name || s.assigned_name.split(" ")[0]))
           : null;
-        const cls = taken ? (s.status === "approved" ? "rg-taken-ok" : "rg-taken-pending") : isPast ? "rg-past" : "rg-open";
+        const cls = taken ? (s.status === "approved" ? "rg-taken-ok" : "rg-taken-pending") : isPast ? "rg-past" : deleteMode ? "rg-open rg-deletable" : "rg-open";
         const lvl = s.level_id
           ? (s.level_name || "").replace("Parents & Toddlers", "P&T").replace("Level ", "L")
           : "🛟";
@@ -1779,11 +1830,15 @@ function refreshRotaGrid(roleSlots, times, weekStart) {
 }
 
 function updateRotaCount() {
-  const sel = document.querySelectorAll(".rb-sel[data-sid]").length;
+  const assignSel = document.querySelectorAll(".rb-sel[data-sid]").length;
+  const deleteSel = document.querySelectorAll(".rb-del-sel[data-sid]").length;
+  const sel = assignSel || deleteSel;
   const el = document.getElementById("rb-selcount");
-  if (el) el.textContent = sel ? `${sel} slot${sel !== 1 ? "s" : ""} selected` : "";
+  if (el) el.textContent = sel ? `${sel} shift${sel !== 1 ? "s" : ""} selected` : "";
   const applyBtn = document.getElementById("rb-apply");
-  if (applyBtn) applyBtn.disabled = sel === 0;
+  if (applyBtn) applyBtn.disabled = assignSel === 0;
+  const delBtn = document.getElementById("rb-delete-apply");
+  if (delBtn) { delBtn.disabled = deleteSel === 0; delBtn.textContent = `Delete ${deleteSel} shift${deleteSel !== 1 ? "s" : ""}`; }
 }
 
 async function manageUsers() {
@@ -1986,9 +2041,9 @@ function classScheduleSheet(level, roles, existingSessions) {
           <label>Assign to</label>
           <select id="cs-user"><option value="">Open — anyone</option></select>
         </div>
-        <div class="field" style="margin:0;width:68px">
-          <label>Count</label>
-          <input id="cs-count" type="number" min="1" max="6" value="1" style="padding:10px 8px"/>
+        <div class="field" style="margin:0;width:88px">
+          <label>No. of classes</label>
+          <input id="cs-count" type="number" min="1" max="20" value="1" style="padding:10px 8px"/>
         </div>
       </div>
       <button class="btn sub block" id="cs-add" style="margin-top:10px">＋ Add this session</button>
@@ -2051,14 +2106,21 @@ function classScheduleSheet(level, roles, existingSessions) {
     const rid = Number(roleEl.value);
     const uid = userEl.value ? Number(userEl.value) : null;
     const count = Number(document.getElementById("cs-count").value) || 1;
+    const wd = Number(document.getElementById("cs-day").value);
     const role = roles.find((r) => r.id === rid);
     const userName = uid ? userEl.options[userEl.selectedIndex].text : null;
-    sessions.push({
-      weekday: Number(document.getElementById("cs-day").value),
-      start_time: start, end_time: end,
-      role_id: rid, role_name: role?.name || "",
-      user_id: uid, user_name: userName, count,
-    });
+    // Merge into existing entry if same day/time/role/level rather than duplicate
+    const existing = sessions.find((s) =>
+      s.weekday === wd && s.start_time === start && s.end_time === end &&
+      s.role_id === rid && s.user_id === uid);
+    if (existing) {
+      existing.count += count;
+      toast(`Updated to ${existing.count} classes at this time`, "ok");
+    } else {
+      sessions.push({ weekday: wd, start_time: start, end_time: end,
+        role_id: rid, role_name: role?.name || "",
+        user_id: uid, user_name: userName, count });
+    }
     renderList();
   });
 
@@ -2636,7 +2698,8 @@ function showSlotApproveSheet(slot) {
     <div style="margin-top:20px;display:flex;gap:10px">
       <button class="btn green" id="sa-confirm">✓ Approve</button>
       <button class="btn ghost" id="sa-cancel">Cancel</button>
-    </div>`);
+    </div>
+    <p class="small muted" style="margin-top:14px">To delete this shift from the rota entirely, decline it first, then use Delete Shifts mode.</p>`);
   document.getElementById("sa-confirm").addEventListener("click", async (e) => {
     e.target.disabled = true; e.target.textContent = "Approving…";
     try {
@@ -2670,7 +2733,8 @@ function showSlotRemoveSheet(slot) {
     <div style="margin-top:16px;display:flex;gap:10px">
       <button class="btn danger" id="sr-confirm">Yes, remove</button>
       <button class="btn ghost" id="sr-cancel">Cancel</button>
-    </div>`);
+    </div>
+    <p class="small muted" style="margin-top:14px">To delete this shift from the rota entirely, remove the staff member here first, then use Delete Shifts mode.</p>`);
   document.getElementById("sr-confirm").addEventListener("click", async (e) => {
     e.target.disabled = true; e.target.textContent = "Removing…";
     const reason = document.getElementById("sr-reason")?.value.trim() || "";

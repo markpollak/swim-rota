@@ -246,6 +246,8 @@ def init_db():
             """UPDATE users SET display_name = CASE WHEN instr(full_name,' ')>0
                THEN substr(full_name,1,instr(full_name,' ')-1)||substr(full_name,instr(full_name,' ')+1,1)
                ELSE full_name END WHERE display_name IS NULL""",
+            "ALTER TABLE slots ADD COLUMN deleted_at TEXT",
+            "ALTER TABLE slots ADD COLUMN deleted_by INTEGER",
         ]:
             try:
                 conn.execute(stmt)

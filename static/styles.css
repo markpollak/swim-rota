@@ -511,6 +511,17 @@ th { color: var(--muted); font-size:.72rem; text-transform:uppercase; letter-spa
 /* Active state for the Wide toggle button */
 .rb-wide-active { background:var(--blue) !important; color:#fff !important; border-color:var(--blue) !important; }
 
+/* Mode toggle (Assign / Delete) */
+.rb-mode-toggle { display:inline-flex; border:2px solid var(--line); border-radius:10px; overflow:hidden; }
+.rb-mode-btn { padding:7px 14px; font-size:.82rem; font-weight:700; border:none; background:transparent; cursor:pointer; color:var(--muted); transition:background .12s,color .12s; }
+.rb-mode-btn.rbt-assign { background:var(--blue); color:#fff; }
+.rb-mode-btn.rbt-delete { background:var(--red); color:#fff; }
+
+/* Delete-mode selected cell */
+.rb-del-sel { background:var(--red) !important; color:#fff !important; border-color:var(--red) !important; }
+/* Deletable open cells get a slightly different hover cue */
+.rg-deletable:hover { background:var(--red-soft) !important; border-color:var(--red) !important; color:var(--red) !important; }
+
 /* Expand the app-main container itself — no breakout tricks needed */
 body.rota-wide .app-main {
   max-width: none;
