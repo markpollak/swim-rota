@@ -1641,8 +1641,6 @@ async function rotaBuilder() {
           </select>
         </div>` : `<div class="small muted" style="flex:1;align-self:center">Click open (blue) shifts to select them. Red and green shifts must have their person removed first.</div>`}
         <div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap">
-          <button class="btn sub sm" id="rb-prev">‹</button>
-          <button class="btn sub sm" id="rb-next">›</button>
           <button class="btn sub sm${State._rotaWidescreen ? " rb-wide-active" : ""}" id="rb-wide" title="Expand to full browser width — shows full names">⊞ Wide</button>
           <button class="btn sub sm" id="rb-print" title="Print rota as PDF">🖨 Print</button>
         </div>
@@ -1650,7 +1648,11 @@ async function rotaBuilder() {
     </div>
 
     <div class="rg-week-header">
-      <div class="rg-week-title">${fmtDate(weekISO)} – ${fmtDate(weekEnd)}</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn sub sm" id="rb-prev">‹</button>
+        <div class="rg-week-title">${fmtDate(weekISO)} – ${fmtDate(weekEnd)}</div>
+        <button class="btn sub sm" id="rb-next">›</button>
+      </div>
       <button class="btn sub sm" id="rb-add-adhoc">＋ Add a single class</button>
     </div>
 
