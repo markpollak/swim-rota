@@ -18,7 +18,11 @@ def monday_of(d: date) -> date:
 
 def generate_slots(conn, from_date: date, to_date: date) -> int:
     """Materialise slots from active templates. Idempotent."""
-    templates = conn.execute("SELECT * FROM templates WHERE active = 1").fetchall()
+    templates = conn.execute("""
+        SELECT t.* FROM templates t
+        LEFT JOIN levels l ON l.id = t.level_id
+        WHERE t.active = 1 AND (t.level_id IS NULL OR l.active = 1)
+    """).fetchall()
     created = 0
     d = from_date
     while d <= to_date:
@@ -57,7 +61,7 @@ def generate_from_schedules(conn, from_date: date, to_date: date) -> int:
         FROM class_schedules cs
         LEFT JOIN levels l ON l.id = cs.level_id
         JOIN schedule_staff ss ON ss.schedule_id = cs.id
-        WHERE cs.active = 1
+        WHERE cs.active = 1 AND (cs.level_id IS NULL OR l.active = 1)
     """).fetchall()
 
     created = 0

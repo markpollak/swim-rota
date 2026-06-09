@@ -7,7 +7,7 @@
 # the ACME challenge when proxying, so we present the origin cert directly.
 #
 # Enable by setting CADDY_CONFIG=./Caddyfile.cloudflare in .env and placing the
-# cert at ./certs/cmwebstats.pem + key at ./certs/cmwebstats.key.
+# cert at ./certs/cert.pem + key at ./certs/cert.key (matching the tls line below).
 # Full walk-through: docs/LAUNCH-cmwebstats.md
 cmwebstats.com, www.cmwebstats.com {
 	encode gzip

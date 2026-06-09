@@ -1669,6 +1669,7 @@ async function rotaBuilder() {
     <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <button class="btn danger" id="rb-delete-apply" disabled>Delete 0 shifts</button>
       <button class="btn ghost sm" id="rb-clearsel">Clear selection</button>
+      <button class="btn sub sm" id="rb-deleted">↩ Recently deleted</button>
       <span class="small muted" id="rb-selcount" style="align-self:center"></span>
     </div>`}
   `;
@@ -1722,6 +1723,9 @@ async function rotaBuilder() {
     State._rotaDeleteMode = b.dataset.mode === "delete";
     rotaBuilder();
   }));
+
+  // Recently-deleted → restore (delete mode only)
+  $("#rb-deleted")?.addEventListener("click", showDeletedShiftsSheet);
 
   // Person change — refresh grid to highlight their existing assignments
   if ($("#rb-person")) $("#rb-person").addEventListener("change", () => refreshRotaGrid(roleSlots, times, State._rotaWeekStart));
@@ -2083,6 +2087,9 @@ function classScheduleSheet(level, roles, existingSessions) {
         </div>
       </div>
       <button class="btn sub block" id="cs-add" style="margin-top:10px">＋ Add this session</button>
+    </div>
+    <div class="small" style="background:var(--amber-soft);color:var(--amber);border-radius:10px;padding:10px 12px;margin-bottom:12px">
+      ⚠ Changing this schedule only affects shifts created <em>from now on</em>. Shifts already on the rota (up to ~6 months ahead) stay put — including any staff are booked on. To clear leftover shifts after removing or moving a class, switch the rota builder to <strong>Delete Shifts</strong> (remove anyone booked on first).
     </div>
     <div style="display:flex;gap:10px">
       <button class="btn ghost block" id="cs-save">Save</button>
@@ -2981,6 +2988,40 @@ document.addEventListener("click", (evt) => {
   if (!evt.target.closest("#addLevel")) return;
   levelSheet(null, State.roles || [], []);
 });
+
+async function showDeletedShiftsSheet() {
+  let restoredAny = false;
+  const sheet = openSheet(`
+    <h2 style="margin-bottom:4px">Recently deleted shifts</h2>
+    <p class="small muted" style="margin-bottom:14px">Restore a shift to put it back on the rota — it returns as open (unassigned).</p>
+    <div id="del-list"><div class="spinner"></div></div>
+    <button class="btn ghost block" id="del-close" style="margin-top:14px">Close</button>`);
+  const finish = () => { closeSheet(); if (restoredAny) rotaBuilder(); };
+  sheet.querySelector("#del-close").addEventListener("click", finish);
+  const list = sheet.querySelector("#del-list");
+  try {
+    const rows = await api("/api/slots/deleted");
+    if (!rows.length) { list.innerHTML = `<div class="empty" style="padding:24px"><div class="big">🗑</div>Nothing deleted recently.</div>`; return; }
+    const DOWX = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+    const MONX = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const fmt = (iso) => { const d = parseISO(iso); return `${DOWX[(d.getDay()+6)%7]} ${d.getDate()} ${MONX[d.getMonth()]}`; };
+    list.innerHTML = rows.map((r) => {
+      const lvl = r.level_name ? esc(r.level_name.replace("Parents & Toddlers","P&T")) : "🛟 Pool duty";
+      return `<div class="del-row between" style="padding:8px 0;border-bottom:1px solid var(--line)" data-del="${r.id}">
+        <div><strong>${esc(fmt(r.date))} ${esc(r.start_time)}–${esc(r.end_time)}</strong>
+          <div class="small muted">${esc(r.role_name)} · ${lvl}${r.deleted_by_name ? " · by " + esc(r.deleted_by_name) : ""}</div></div>
+        <button class="btn sub sm" data-restore="${r.id}">Restore</button></div>`;
+    }).join("");
+    list.querySelectorAll("[data-restore]").forEach((b) => b.addEventListener("click", async () => {
+      b.disabled = true; b.textContent = "…";
+      try {
+        await api(`/api/slots/${b.dataset.restore}/restore`, { method: "POST" });
+        toast("Shift restored", "ok"); restoredAny = true;
+        b.closest(".del-row").remove();
+      } catch (err) { toast(err.message, "err"); b.disabled = false; b.textContent = "Restore"; }
+    }));
+  } catch (err) { list.innerHTML = `<div class="banner danger">${esc(err.message)}</div>`; }
+}
 
 // Permanent delegated handler for the delete-apply button.
 // Attached once here so it survives async rotaBuilder DOM rebuilds.

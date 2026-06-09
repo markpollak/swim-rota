@@ -161,7 +161,13 @@ LOGIN_WINDOW = 300          # seconds (5 min)
 
 
 def _client_ip(request: Request) -> str:
-    # Behind Caddy the socket peer is the proxy; trust its X-Forwarded-For.
+    # Behind Cloudflare, CF-Connecting-IP is the real client and is set by
+    # Cloudflare (not forwardable by the client), so it can't be spoofed to dodge
+    # the limiter, nor does it collapse everyone onto the edge IP. Fall back to
+    # X-Forwarded-For (Caddy/other proxy) then the socket peer.
+    cf = request.headers.get("cf-connecting-ip")
+    if cf:
+        return cf.strip()
     xff = request.headers.get("x-forwarded-for")
     if xff:
         return xff.split(",")[0].strip()
@@ -336,7 +342,7 @@ def check_double_book(conn, user_id, slot, exclude_id=None):
     rows = conn.execute(
         """SELECT start_time, end_time FROM slots
            WHERE assigned_user_id = ? AND date = ? AND status IN ('requested','approved')
-           AND id != ?""",
+           AND id != ? AND deleted_at IS NULL""",
         (user_id, slot["date"], exclude_id or -1)).fetchall()
     for r in rows:
         if overlaps(slot["start_time"], slot["end_time"], r["start_time"], r["end_time"]):
@@ -395,7 +401,7 @@ def list_slots(request: Request, user=Depends(current_user)):
                     JOIN roles r ON r.id = s2.role_id
                     WHERE s2.assigned_user_id = ? AND s2.date = ?
                     AND s2.status = 'approved' AND s2.id != ?
-                    AND s2.start_time < ? AND ? < s2.end_time
+                    AND s2.start_time < ? AND ? < s2.end_time AND s2.deleted_at IS NULL
                 """, (uid, row["date"], row["id"], row["end_time"], row["start_time"])).fetchone()
                 if clash:
                     lvl = clash["level_name"] or "pool duty"
@@ -404,7 +410,9 @@ def list_slots(request: Request, user=Depends(current_user)):
 
 
 def _get_slot(conn, slot_id):
-    s = conn.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+    # Exclude soft-deleted slots so request/approve/assign/release/reject all treat
+    # a deleted shift as gone (404) rather than acting on a hidden row.
+    s = conn.execute("SELECT * FROM slots WHERE id = ? AND deleted_at IS NULL", (slot_id,)).fetchone()
     if not s:
         raise HTTPException(404, "Shift not found")
     return dict(s)
@@ -426,7 +434,7 @@ def request_slot(slot_id: int, user=Depends(current_user)):
         # slipped in between the SELECT above and this UPDATE.
         cur = conn.execute(
             "UPDATE slots SET assigned_user_id=?, status='requested', requested_at=? "
-            "WHERE id=? AND status='open'",
+            "WHERE id=? AND status='open' AND deleted_at IS NULL",
             (user["id"], now_iso(), slot_id))
         if cur.rowcount == 0:
             raise HTTPException(409, "That shift was just taken by someone else.")
@@ -499,7 +507,7 @@ def approve_slot(slot_id: int, admin=Depends(require_admin)):
         # Guard on the request not having changed (released/reassigned) since we read it.
         cur = conn.execute(
             "UPDATE slots SET status='approved', decided_at=?, decided_by=? "
-            "WHERE id=? AND status='requested' AND assigned_user_id=?",
+            "WHERE id=? AND status='requested' AND assigned_user_id=? AND deleted_at IS NULL",
             (now_iso(), admin["id"], slot_id, s["assigned_user_id"]))
         if cur.rowcount == 0:
             raise HTTPException(409, "That request changed before it could be approved.")
@@ -563,7 +571,8 @@ async def assign_slot(slot_id: int, request: Request, admin=Depends(require_admi
         # overwrite each other (release first to reassign a taken slot).
         cur = conn.execute(
             """UPDATE slots SET assigned_user_id=?, status='approved',
-                        requested_at=?, decided_at=?, decided_by=? WHERE id=? AND status='open'""",
+                        requested_at=?, decided_at=?, decided_by=?
+               WHERE id=? AND status='open' AND deleted_at IS NULL""",
             (uid, now_iso(), now_iso(), admin["id"], slot_id))
         if cur.rowcount == 0:
             raise HTTPException(409, "That shift is no longer open.")
@@ -601,14 +610,19 @@ async def create_slot(request: Request, admin=Depends(require_admin)):
 
 @app.delete("/api/slots/{slot_id}")
 def delete_slot(slot_id: int, admin=Depends(require_admin)):
-    with db.get_db() as conn:
-        s = conn.execute("SELECT * FROM slots WHERE id=?", (slot_id,)).fetchone()
+    # Immediate lock + conditional UPDATE so a slot can't be deleted out from under
+    # a request that lands at the same moment (would orphan the claim otherwise).
+    with db.get_db_immediate() as conn:
+        s = conn.execute("SELECT * FROM slots WHERE id=? AND deleted_at IS NULL", (slot_id,)).fetchone()
         if not s:
             raise HTTPException(404, "Slot not found")
         if s["status"] != "open":
             raise HTTPException(400, "Only open shifts can be deleted — remove the assigned person first")
-        conn.execute("UPDATE slots SET deleted_at=?, deleted_by=? WHERE id=?",
-                     (now_iso(), admin["id"], slot_id))
+        cur = conn.execute(
+            "UPDATE slots SET deleted_at=?, deleted_by=? WHERE id=? AND status='open' AND deleted_at IS NULL",
+            (now_iso(), admin["id"], slot_id))
+        if cur.rowcount == 0:
+            raise HTTPException(409, "That shift was just taken — remove the person before deleting.")
         _audit(conn, admin["id"], "shifts", "slot_delete", _slot_desc(dict(s)))
         return {"ok": True}
 
@@ -619,19 +633,54 @@ async def bulk_delete_slots(request: Request, admin=Depends(require_admin)):
     ids = b.get("slot_ids", [])
     if not ids:
         raise HTTPException(400, "No slot_ids provided")
-    with db.get_db() as conn:
+    with db.get_db_immediate() as conn:
         deleted = 0
         skipped = []
         for slot_id in ids:
-            s = conn.execute("SELECT * FROM slots WHERE id=?", (slot_id,)).fetchone()
-            if not s or s["status"] != "open" or s["deleted_at"]:
+            # Conditional: only delete a still-open, not-already-deleted slot; a slot
+            # that was just claimed (or already gone) is skipped, not clobbered.
+            cur = conn.execute(
+                "UPDATE slots SET deleted_at=?, deleted_by=? WHERE id=? AND status='open' AND deleted_at IS NULL",
+                (now_iso(), admin["id"], slot_id))
+            if cur.rowcount == 0:
                 skipped.append(slot_id)
                 continue
-            conn.execute("UPDATE slots SET deleted_at=?, deleted_by=? WHERE id=?",
-                         (now_iso(), admin["id"], slot_id))
-            _audit(conn, admin["id"], "shifts", "slot_delete", _slot_desc(dict(s)))
             deleted += 1
+        if deleted:
+            _audit(conn, admin["id"], "shifts", "slot_bulk_delete",
+                   f"{deleted} shift{'s' if deleted != 1 else ''}")
         return {"deleted": deleted, "skipped": len(skipped)}
+
+
+@app.get("/api/slots/deleted")
+def list_deleted_slots(admin=Depends(require_admin)):
+    """Recently soft-deleted, still-relevant (future) shifts — for the restore view."""
+    with db.get_db() as conn:
+        rows = conn.execute("""
+            SELECT s.id, s.date, s.start_time, s.end_time, s.deleted_at,
+                   r.name role_name, r.color role_color, l.name level_name,
+                   du.full_name deleted_by_name
+            FROM slots s
+            JOIN roles r ON r.id = s.role_id
+            LEFT JOIN levels l ON l.id = s.level_id
+            LEFT JOIN users du ON du.id = s.deleted_by
+            WHERE s.deleted_at IS NOT NULL AND s.date >= ?
+            ORDER BY s.deleted_at DESC, s.date, s.start_time
+            LIMIT 200""", (today_iso(),)).fetchall()
+        return db.dict_rows(rows)
+
+
+@app.post("/api/slots/{slot_id}/restore")
+def restore_slot(slot_id: int, admin=Depends(require_admin)):
+    """Undo a soft-delete: the (still-open) shift reappears on the rota."""
+    with db.get_db_immediate() as conn:
+        s = conn.execute("SELECT * FROM slots WHERE id=? AND deleted_at IS NOT NULL",
+                         (slot_id,)).fetchone()
+        if not s:
+            raise HTTPException(404, "No deleted shift to restore.")
+        conn.execute("UPDATE slots SET deleted_at=NULL, deleted_by=NULL WHERE id=?", (slot_id,))
+        _audit(conn, admin["id"], "shifts", "slot_restore", _slot_desc(dict(s)))
+        return {"ok": True}
 
 
 async def _has_body(request: Request) -> bool:
@@ -656,7 +705,7 @@ async def bulk_assign(request: Request, admin=Depends(require_admin)):
             s = conn.execute(
                 """SELECT s.*, l.name level_name, r.name role_name
                    FROM slots s LEFT JOIN levels l ON l.id=s.level_id
-                   JOIN roles r ON r.id=s.role_id WHERE s.id=?""", (sid,)).fetchone()
+                   JOIN roles r ON r.id=s.role_id WHERE s.id=? AND s.deleted_at IS NULL""", (sid,)).fetchone()
             if not s:
                 skipped_details.append({"slot_id": sid, "reason": "Slot not found"})
                 continue
@@ -681,7 +730,7 @@ async def bulk_assign(request: Request, admin=Depends(require_admin)):
                        JOIN roles r ON r.id=s2.role_id
                        WHERE s2.assigned_user_id=? AND s2.date=?
                        AND s2.status IN ('approved','requested') AND s2.id!=?
-                       AND s2.start_time < ? AND ? < s2.end_time""",
+                       AND s2.start_time < ? AND ? < s2.end_time AND s2.deleted_at IS NULL""",
                     (uid, s["date"], sid, s["end_time"], s["start_time"])).fetchone()
                 if clash:
                     lvl = clash["level_name"] or "pool duty"
@@ -695,7 +744,7 @@ async def bulk_assign(request: Request, admin=Depends(require_admin)):
             status = "approved" if auto_approve else "requested"
             cur = conn.execute(
                 """UPDATE slots SET assigned_user_id=?, status=?, requested_at=?,
-                        decided_at=?, decided_by=? WHERE id=? AND status='open'""",
+                        decided_at=?, decided_by=? WHERE id=? AND status='open' AND deleted_at IS NULL""",
                 (uid, status, now_iso(), now_iso() if auto_approve else None,
                  admin["id"] if auto_approve else None, sid))
             if cur.rowcount == 0:  # claimed by someone else between the check and here
@@ -1109,7 +1158,7 @@ def report_coverage(request: Request, admin=Depends(require_admin)):
                    SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) approved,
                    SUM(CASE WHEN status='requested' THEN 1 ELSE 0 END) requested,
                    SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) open
-            FROM slots WHERE date >= ? AND date <= ?
+            FROM slots WHERE date >= ? AND date <= ? AND deleted_at IS NULL
             GROUP BY date ORDER BY date""", (frm, to)).fetchall()
         return {"from": frm, "to": to, "days": db.dict_rows(rows)}
 
