@@ -255,3 +255,33 @@ def test_public_config_hides_demo_logins_by_default():
     _seed_base()
     code, cfg = _api("GET", "/api/public-config")
     assert code == 200 and cfg["demo_logins"] is False
+
+
+# ============================================================ soft-delete (S1/S2/S5)
+def test_deleted_slot_excluded_from_coverage_and_unclaimable_and_restorable():
+    role = _seed_base()
+    admin = _make_admin("boss4", "rightpass1"); atok = auth.make_token(admin)
+    (uid,) = _make_users(role, 1); utok = auth.make_token(uid)
+    slot = _make_open_slot(role)
+
+    def coverage_total():
+        _, cov = _api("GET", f"/api/reports/coverage?from={FUTURE}&to={FUTURE}", atok)
+        return cov["days"][0]["total"] if cov["days"] else 0
+
+    before = coverage_total()
+    assert before >= 1, before
+
+    # delete it → drops out of the coverage count (S1)
+    assert _api("DELETE", f"/api/slots/{slot}", atok)[0] == 200
+    assert coverage_total() == before - 1
+
+    # a deleted slot can't be claimed (S2) — treated as gone
+    assert _api("POST", f"/api/slots/{slot}/request", utok)[0] == 404
+
+    # it shows in the deleted list and restores cleanly (S5)
+    deleted = _api("GET", "/api/slots/deleted", atok)[1]
+    assert any(d["id"] == slot for d in deleted), deleted
+    assert _api("POST", f"/api/slots/{slot}/restore", atok)[0] == 200
+    assert coverage_total() == before  # back in the count
+    # ...and is claimable again once restored
+    assert _api("POST", f"/api/slots/{slot}/request", utok)[0] == 200

@@ -260,3 +260,19 @@ The design soft-deletes slots (`slots.deleted_at`/`deleted_by`), hides them via 
 2. **P1 / P2** — Cloudflare real-IP + origin firewall (security of the live box).
 3. **S4** — reconcile future slots on schedule edits (biggest day-to-day surprise).
 4. **S3, S5, S6** — deletion concurrency, restore/purge, level retirement.
+
+### ✅ Fixes applied (this pass)
+
+All the Review-3 items were implemented except the S4 auto-delete (deliberately deferred — see below). Server-side changes plus a frontend restore view; covered by tests (`tests/`, 8 passing incl. a new soft-delete test).
+
+- **S1 ✅** — `report_coverage` now filters `deleted_at IS NULL`; deleted shifts no longer inflate coverage counts.
+- **S2 ✅** — `_get_slot` excludes deleted (request/approve/assign/release/reject now 404 on a deleted shift); `deleted_at IS NULL` added to the request/approve/assign/bulk-assign conditional UPDATEs, `check_double_book`, and both clash sub-queries.
+- **S3 ✅** — `delete_slot`/`bulk_delete` now run in `get_db_immediate()` with conditional `WHERE status='open' AND deleted_at IS NULL` + rowcount, so a claim racing a delete can't orphan.
+- **S5 ✅** — added `GET /api/slots/deleted` + `POST /api/slots/{id}/restore` and a **"↩ Recently deleted"** restore sheet in the rota builder (restores a shift as open). Deletion now has an undo for future shifts.
+- **S6 ✅** — `generate_slots` and `generate_from_schedules` now skip slots for **inactive levels**, so deactivating a class stops new shifts (pool-duty/`level_id IS NULL` unaffected).
+- **P1 ✅** — `_client_ip` now prefers `CF-Connecting-IP` (Cloudflare-set, not client-spoofable, not collapsed to the edge IP) before `X-Forwarded-For`.
+- **P3 ✅** — `Caddyfile.cloudflare` comment corrected to `cert.pem`/`cert.key`.
+- **Bonus ✅** — fixed a pre-existing console error in Delete-Shifts mode: the `#rb-apply` binding (absent in delete mode) threw and silently broke the "Clear selection" button; now guarded.
+- Added `idx_slots_deleted` index since most slot queries now filter `deleted_at`.
+
+**S4 — deferred on purpose (auto-deleting leftover shifts).** Implementing a safe "cancel a class → clear its future shifts" requires reliably identifying *which* shifts belong to a removed class. On the live data that isn't currently possible: schedule-generated **and** ad-hoc single shifts both carry `template_id IS NULL` with **no link back to their schedule**, and production has ~2,000 real staff bookings — so an automated delete could remove ad-hoc or unrelated shifts. The correct fix is a small schema change (a `source_schedule_id` on `slots`) so orphans can be matched precisely; that's a separate, careful migration. In the meantime the **schedule editor now shows a clear warning** that editing/removing a class doesn't remove already-generated shifts and points to Delete-Shifts mode, and the new **restore** view makes manual cleanup safely reversible.

@@ -248,6 +248,8 @@ def init_db():
                ELSE full_name END WHERE display_name IS NULL""",
             "ALTER TABLE slots ADD COLUMN deleted_at TEXT",
             "ALTER TABLE slots ADD COLUMN deleted_by INTEGER",
+            # Index the soft-delete flag: most slot queries now filter deleted_at IS NULL.
+            "CREATE INDEX IF NOT EXISTS idx_slots_deleted ON slots(deleted_at)",
         ]:
             try:
                 conn.execute(stmt)

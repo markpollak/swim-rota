@@ -1751,7 +1751,7 @@ async function rotaBuilder() {
     }));
 
   // Apply button
-  $("#rb-apply").addEventListener("click", async () => {
+  $("#rb-apply")?.addEventListener("click", async () => {  // #rb-apply absent in delete mode
     const uid = Number($("#rb-person").value);
     if (!uid) return toast("Choose a person first", "err");
     const ids = [...mb.querySelectorAll(".rb-sel[data-sid]")].map((c) => Number(c.dataset.sid));
