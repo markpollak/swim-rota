@@ -126,3 +126,40 @@ everyone simply re-logs-in.)
 ## TL;DR
 - **Droplet:** 1 vCPU / **2 GB** / 50 GB SSD (~$12/mo), London. Add a **domain + HTTPS** so the PWA installs.
 - **Backups:** DO weekly VM backups *plus* a nightly `VACUUM INTO` snapshot of the DB **and `.env`**, copied to Spaces, 14-day retention. Test a restore.
+
+---
+
+## 4. Locking the origin to Cloudflare (audit item P2)
+
+**Goal:** stop people reaching the droplet directly on `165.232.96.67` and bypassing
+Cloudflare's WAF/DDoS protection. Today ports 80/443 are open to the whole internet.
+
+> ⚠️ **Do _not_ try to do this with `ufw`.** Docker publishes the app's ports by
+> writing iptables rules directly, and those **bypass ufw** — a `ufw deny 80/443`
+> looks like it's working but the app stays reachable. Use one of the two methods
+> below instead.
+
+### Recommended: DigitalOcean Cloud Firewall (at the edge, can't be bypassed)
+In the DO panel → **Networking → Firewalls → Create Firewall**, attach it to the
+droplet, and set **inbound** rules:
+- **SSH** TCP 22 — *your IP only* (or a trusted range).
+- **HTTP** TCP 80 and **HTTPS** TCP 443 — **Sources: Cloudflare's published IP
+  ranges only** (`https://www.cloudflare.com/ips/` — add both the IPv4 and IPv6
+  lists).
+- Leave outbound as default (allow all).
+
+That filters traffic before it reaches the droplet, so Docker can't undo it. When
+Cloudflare changes ranges (rare) refresh the list; or automate with `doctl`.
+
+### Most robust alternative: Cloudflare Tunnel
+Run `cloudflared` on the droplet and point Cloudflare at the tunnel. Then **no
+inbound ports need to be open at all** (you can close 80/443 entirely) — the origin
+becomes unreachable except through Cloudflare. Slightly more setup, strongest result.
+
+### Also worth enabling
+- **Authenticated Origin Pulls** (Cloudflare SSL/TLS → Origin Server) so the origin
+  only accepts TLS from Cloudflare — defence in depth alongside the firewall.
+- Keep SSL/TLS mode on **Full (strict)** (already set) — never *Flexible*.
+
+> The app-side half of this (trusting `CF-Connecting-IP` for rate-limiting so it
+> isn't spoofable or collapsed onto Cloudflare's edge IP) is already done in code.
