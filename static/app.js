@@ -2110,18 +2110,26 @@ function classScheduleSheet(level, roles, existingSessions) {
       <div style="margin-bottom:10px">
         <div class="small" style="font-weight:700;color:var(--blue);margin-bottom:4px">${DAYS[wd]}</div>
         ${byDay[wd].map((s) => `
-          <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin-bottom:6px">
-            <div style="flex:1">
+          <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px">
+            <div style="flex:1;min-width:0">
               <span style="font-weight:700">${s.start_time}–${s.end_time}</span>
-              <span class="small muted" style="margin-left:8px">${esc(s.role_name || "")}</span>
+              <span class="small muted" style="margin-left:6px">${esc(s.role_name || "")}</span>
               ${s.user_name ? `<span class="small" style="margin-left:6px;color:var(--green);font-weight:700">→ ${esc(s.user_name.split(" ")[0])}</span>` : `<span class="small muted" style="margin-left:6px">Open</span>`}
-              ${s.count > 1 ? `<span class="small muted"> ×${s.count}</span>` : ""}
             </div>
-            <button class="btn danger sm" data-rm="${s._i}">✕</button>
+            <div style="display:flex;align-items:center;gap:2px" title="Number of these classes at this time">
+              <button class="btn ghost sm cs-step" data-cm="${s._i}" style="padding:2px 9px">−</button>
+              <span class="small" style="min-width:34px;text-align:center;font-weight:700">×${s.count || 1}</span>
+              <button class="btn ghost sm cs-step" data-cp="${s._i}" style="padding:2px 9px">＋</button>
+            </div>
+            <button class="btn danger sm" data-rm="${s._i}" style="padding:2px 9px">✕</button>
           </div>`).join("")}
       </div>`).join("");
     el.querySelectorAll("[data-rm]").forEach((b) =>
       b.addEventListener("click", () => { sessions.splice(Number(b.dataset.rm), 1); renderList(); }));
+    el.querySelectorAll("[data-cm]").forEach((b) =>
+      b.addEventListener("click", () => { const i = Number(b.dataset.cm); sessions[i].count = Math.max(1, (sessions[i].count || 1) - 1); renderList(); }));
+    el.querySelectorAll("[data-cp]").forEach((b) =>
+      b.addEventListener("click", () => { const i = Number(b.dataset.cp); sessions[i].count = (sessions[i].count || 1) + 1; renderList(); }));
   }
   renderList();
 

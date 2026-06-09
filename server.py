@@ -1070,11 +1070,30 @@ def _level_schedule_signatures(conn, level_id):
     return {(r["weekday"], r["start_time"], r["end_time"], r["role_id"]) for r in rows}
 
 
+def _level_schedule_desired(conn, level_id):
+    """sig (weekday, start, end, role_id) -> total desired count for this level."""
+    if level_id is None:
+        rows = conn.execute("""SELECT cs.weekday, cs.start_time, cs.end_time, ss.role_id, ss.count
+            FROM class_schedules cs JOIN schedule_staff ss ON ss.schedule_id=cs.id
+            WHERE cs.level_id IS NULL AND cs.active=1""").fetchall()
+    else:
+        rows = conn.execute("""SELECT cs.weekday, cs.start_time, cs.end_time, ss.role_id, ss.count
+            FROM class_schedules cs JOIN schedule_staff ss ON ss.schedule_id=cs.id
+            WHERE cs.level_id=? AND cs.active=1""", (level_id,)).fetchall()
+    out = {}
+    for r in rows:
+        sig = (r["weekday"], r["start_time"], r["end_time"], r["role_id"])
+        out[sig] = out.get(sig, 0) + r["count"]
+    return out
+
+
 def _level_orphan_slots(conn, level_id):
-    """Future, non-deleted, SCHEDULE-GENERATED slots for this level whose
-    (weekday, start, end, role) no longer matches any current scheduled session.
-    Ad-hoc / template slots (source_schedule_id IS NULL) are never included, so a
-    schedule edit can't sweep away one-off shifts."""
+    """Future, non-deleted, SCHEDULE-GENERATED slots for this level that exceed what
+    the schedule now wants — covers both removed sessions (desired 0) and *reduced
+    counts* (excess over the desired number at that day/time/role). Ad-hoc/template
+    slots (source_schedule_id IS NULL) are never included. Within an over-staffed
+    slot, OPEN shifts are picked for removal before assigned ones, so staff keep
+    their bookings wherever possible."""
     today = today_iso()
     if level_id is None:
         rows = conn.execute("""SELECT * FROM slots WHERE level_id IS NULL AND date >= ?
@@ -1082,12 +1101,18 @@ def _level_orphan_slots(conn, level_id):
     else:
         rows = conn.execute("""SELECT * FROM slots WHERE level_id = ? AND date >= ?
             AND deleted_at IS NULL AND source_schedule_id IS NOT NULL""", (level_id, today)).fetchall()
-    sigs = _level_schedule_signatures(conn, level_id)
-    out = []
+    desired = _level_schedule_desired(conn, level_id)
+    groups: dict = {}  # (date, sig) -> [slot dicts]
     for s in rows:
         wd = date.fromisoformat(s["date"]).weekday()
-        if (wd, s["start_time"], s["end_time"], s["role_id"]) not in sigs:
-            out.append(dict(s))
+        sig = (wd, s["start_time"], s["end_time"], s["role_id"])
+        groups.setdefault((s["date"], sig), []).append(dict(s))
+    out = []
+    for (_d, sig), slots in groups.items():
+        excess = len(slots) - desired.get(sig, 0)
+        if excess > 0:
+            slots.sort(key=lambda s: 0 if s["status"] == "open" else 1)  # open first
+            out.extend(slots[:excess])
     return out
 
 
@@ -1153,10 +1178,13 @@ async def set_level_schedule(level_ref: str, request: Request, admin=Depends(req
 
 @app.post("/api/class-schedules/level/{level_ref}/reconcile")
 def reconcile_level_schedule(level_ref: str, admin=Depends(require_admin)):
-    """Remove leftover future shifts for a level that no longer match its schedule.
-    Open ones are soft-deleted; assigned ones are released, then the worker gets a
-    bell notification AND a direct message from the admin listing the cancelled
-    shifts. Ad-hoc shifts are never touched."""
+    """Remove leftover future shifts for a level that no longer match its schedule
+    (removed sessions or reduced counts). These are **hard-deleted** (not tombstoned)
+    so the same class/count can be re-added later and regenerate cleanly — manual
+    Delete-Shifts removals stay soft-deleted and keep suppressing regeneration.
+    Assigned shifts are released first; the worker gets a bell notification AND a
+    direct message from the admin listing the cancelled shifts. Ad-hoc shifts are
+    never touched."""
     if level_ref == "duty":
         level_id = None
     elif level_ref.isdigit():
@@ -1180,9 +1208,8 @@ def reconcile_level_schedule(level_ref: str, admin=Depends(require_admin)):
                 removed_assigned += 1
             else:
                 removed_open += 1
-            conn.execute(
-                "UPDATE slots SET deleted_at=?, deleted_by=?, assigned_user_id=NULL, status='open' WHERE id=?",
-                (now_iso(), admin["id"], o["id"]))
+            # Hard-delete so it leaves no tombstone to block a future re-add/increase.
+            conn.execute("DELETE FROM slots WHERE id=?", (o["id"],))
         for uid, shifts in affected.items():
             cnt = len(shifts)
             notify_user(conn, uid,

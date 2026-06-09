@@ -331,3 +331,64 @@ def test_schedule_edit_reconciles_orphaned_shifts_but_spares_adhoc():
             """SELECT COUNT(*) c FROM messages m JOIN channels ch ON ch.id=m.channel_id
                WHERE ch.dm_user_id=? AND ch.type='dm' AND m.user_id=? AND m.body LIKE '%cancelled%'""",
             (uid, admin)).fetchone()["c"] >= 1, "worker should get a cancellation DM from the admin"
+
+
+# ============================================= re-add a deleted class (regenerate)
+def test_readd_deleted_class_regenerates():
+    import scheduling
+    role = _seed_base()
+    admin = _make_admin("boss6", "rightpass1"); atok = auth.make_token(admin)
+    wd = date.fromisoformat(FUTURE).weekday()
+    fut = date.fromisoformat(FUTURE)
+    with db.get_db() as conn:
+        lvl = conn.execute("INSERT INTO levels (name, sort_order) VALUES ('TL', 1)").lastrowid
+    sess = {"weekday": wd, "start_time": "15:00", "end_time": "15:30", "role_id": role, "user_id": None, "count": 1}
+
+    # add class + generate one day's slot
+    _api("PUT", f"/api/class-schedules/level/{lvl}", atok, {"sessions": [sess]})
+    with db.get_db() as conn:
+        scheduling.generate_from_schedules(conn, fut, fut)
+        assert conn.execute("SELECT COUNT(*) c FROM slots WHERE level_id=? AND deleted_at IS NULL",
+                            (lvl,)).fetchone()["c"] == 1
+
+    # remove the class entirely → reconcile HARD-deletes it (no tombstone left behind)
+    _api("PUT", f"/api/class-schedules/level/{lvl}", atok, {"sessions": []})
+    _api("POST", f"/api/class-schedules/level/{lvl}/reconcile", atok)
+    with db.get_db() as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM slots WHERE level_id=?", (lvl,)).fetchone()["c"] == 0, \
+            "removed class should leave no slots (hard-deleted, not tombstoned)"
+
+    # re-add the SAME class → nothing blocks it, generation works again
+    _api("PUT", f"/api/class-schedules/level/{lvl}", atok, {"sessions": [sess]})
+    with db.get_db() as conn:
+        scheduling.generate_from_schedules(conn, fut, fut)
+        assert conn.execute("SELECT COUNT(*) c FROM slots WHERE level_id=? AND deleted_at IS NULL",
+                            (lvl,)).fetchone()["c"] == 1, "re-added class should regenerate"
+
+
+# ============================================= reduce a class's count (excess)
+def test_count_reduction_removes_open_excess_keeps_assigned():
+    role = _seed_base()
+    admin = _make_admin("boss7", "rightpass1"); atok = auth.make_token(admin)
+    (uid,) = _make_users(role, 1)
+    wd = date.fromisoformat(FUTURE).weekday()
+    with db.get_db() as conn:
+        lvl = conn.execute("INSERT INTO levels (name, sort_order) VALUES ('TL2', 1)").lastrowid
+        cs = conn.execute("INSERT INTO class_schedules (level_id, weekday, start_time, end_time) VALUES (?,?,?,?)",
+                          (lvl, wd, "15:00", "15:30")).lastrowid
+        conn.execute("INSERT INTO schedule_staff (schedule_id, role_id, user_id, count) VALUES (?,?,NULL,2)", (cs, role))
+        conn.execute("INSERT INTO slots (date,start_time,end_time,level_id,role_id,status,source_schedule_id) "
+                     "VALUES (?,?,?,?,?, 'open', ?)", (FUTURE, "15:00", "15:30", lvl, role, cs))
+        conn.execute("INSERT INTO slots (date,start_time,end_time,level_id,role_id,status,assigned_user_id,source_schedule_id) "
+                     "VALUES (?,?,?,?,?, 'approved', ?, ?)", (FUTURE, "15:00", "15:30", lvl, role, uid, cs))
+
+    # reduce count 2 -> 1
+    st, resp = _api("PUT", f"/api/class-schedules/level/{lvl}", atok,
+                    {"sessions": [{"weekday": wd, "start_time": "15:00", "end_time": "15:30",
+                                   "role_id": role, "user_id": None, "count": 1}]})
+    assert resp["orphans"] == {"open": 1, "assigned": 0, "total": 1}, resp["orphans"]  # one OPEN excess
+    _api("POST", f"/api/class-schedules/level/{lvl}/reconcile", atok)
+    with db.get_db() as conn:
+        rows = conn.execute("SELECT status, assigned_user_id FROM slots WHERE level_id=? AND deleted_at IS NULL",
+                            (lvl,)).fetchall()
+    assert len(rows) == 1 and rows[0]["assigned_user_id"] == uid, "keep the assigned shift, drop the open one"
