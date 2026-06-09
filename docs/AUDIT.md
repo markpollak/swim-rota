@@ -276,3 +276,15 @@ All the Review-3 items were implemented except the S4 auto-delete (deliberately 
 - Added `idx_slots_deleted` index since most slot queries now filter `deleted_at`.
 
 **S4 — deferred on purpose (auto-deleting leftover shifts).** Implementing a safe "cancel a class → clear its future shifts" requires reliably identifying *which* shifts belong to a removed class. On the live data that isn't currently possible: schedule-generated **and** ad-hoc single shifts both carry `template_id IS NULL` with **no link back to their schedule**, and production has ~2,000 real staff bookings — so an automated delete could remove ad-hoc or unrelated shifts. The correct fix is a small schema change (a `source_schedule_id` on `slots`) so orphans can be matched precisely; that's a separate, careful migration. In the meantime the **schedule editor now shows a clear warning** that editing/removing a class doesn't remove already-generated shifts and points to Delete-Shifts mode, and the new **restore** view makes manual cleanup safely reversible.
+
+### ✅ S4 now implemented (follow-up)
+
+The earlier blocker — no way to tell a removed class's shifts from ad-hoc ones — is solved by tagging. **`slots.source_schedule_id`** links each generated shift to the `class_schedule` it came from, and the seed now models **all** classes (and lifeguard pool-duty) as `class_schedules` so the in-app editor is the single source of truth and every generated slot is tagged.
+
+- `generate_from_schedules` stamps `source_schedule_id` on each slot.
+- Editing a class returns the count of **leftover future shifts** that no longer match (`set_level_schedule` → `orphans: {open, assigned, total}`), computed by signature **only over schedule-tagged slots** — ad-hoc/untagged shifts are never included.
+- `POST /api/class-schedules/level/{ref}/reconcile` clears them: open ones soft-deleted, assigned ones released **and the worker notified** (one summary notification each), all audited.
+- The schedule editor now **prompts** after a change ("Remove N leftover shifts? — M are assigned, staff will be notified") with Remove / Keep.
+- Tested: `test_schedule_edit_reconciles_orphaned_shifts_but_spares_adhoc` (orphan count, removal, ad-hoc untouched, worker notified). Verified end-to-end in the UI.
+
+> *Migration note:* on an existing database, pre-existing slots have `source_schedule_id = NULL`, so reconcile won't touch them — the feature applies cleanly to freshly-generated shifts. A reseed (authorised here) gives the unified, fully-tagged model. **Known gap:** reducing a session's *count* (same weekday/time/role) isn't treated as an orphan yet — removed sessions and time changes are.

@@ -39,7 +39,8 @@ Versions of the article about building the app with Claude Code, plus the screen
 | `12-profile.png` | Staff profile / training | ✅ |
 | `13-pending-requester.png` | Pending-requester modal | ✅ |
 | `14-force-password.png` | Forced password-change screen | ✅ |
-| `16-rota-delete.png` | Delete-Shifts mode (newest feature) | ✅ |
+| `16-rota-delete.png` | Delete-Shifts mode | ✅ |
+| `17-schedule-cleanup.png` | Cancel-a-class cleanup prompt (newest feature) | ✅ |
 
 The three “spare” shots (`02`, `07`, `11`) aren’t embedded in the article but are included if you want to swap any in.
 

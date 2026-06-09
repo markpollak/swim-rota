@@ -2088,8 +2088,8 @@ function classScheduleSheet(level, roles, existingSessions) {
       </div>
       <button class="btn sub block" id="cs-add" style="margin-top:10px">＋ Add this session</button>
     </div>
-    <div class="small" style="background:var(--amber-soft);color:var(--amber);border-radius:10px;padding:10px 12px;margin-bottom:12px">
-      ⚠ Changing this schedule only affects shifts created <em>from now on</em>. Shifts already on the rota (up to ~6 months ahead) stay put — including any staff are booked on. To clear leftover shifts after removing or moving a class, switch the rota builder to <strong>Delete Shifts</strong> (remove anyone booked on first).
+    <div class="small" style="background:var(--blue-soft);border-radius:10px;padding:10px 12px;margin-bottom:12px">
+      ℹ When you save, if removing or moving a class leaves shifts on the rota that no longer match, you'll be offered to clear them in one step — any staff already booked on are notified their shift was cancelled.
     </div>
     <div style="display:flex;gap:10px">
       <button class="btn ghost block" id="cs-save">Save</button>
@@ -2173,7 +2173,7 @@ function classScheduleSheet(level, roles, existingSessions) {
     if (saveBtn) saveBtn.disabled = true;
     if (genBtn) genBtn.disabled = true;
     try {
-      await api(`/api/class-schedules/level/${levelRef}`, {
+      const res = await api(`/api/class-schedules/level/${levelRef}`, {
         method: "PUT",
         body: {
           sessions: sessions.map((s) => ({
@@ -2188,6 +2188,11 @@ function classScheduleSheet(level, roles, existingSessions) {
       } else {
         toast("Schedule saved", "ok");
       }
+      // If the change left shifts on the rota that no longer match, offer to clear them.
+      if (res.orphans && res.orphans.total > 0) {
+        promptReconcileCleanup(levelRef, res.orphans);  // closes this sheet + refreshes
+        return;
+      }
       closeSheet();
       manageClasses();
     } catch (err) {
@@ -2199,6 +2204,31 @@ function classScheduleSheet(level, roles, existingSessions) {
 
   document.getElementById("cs-save").addEventListener("click", () => save(false));
   document.getElementById("cs-generate").addEventListener("click", () => save(true));
+}
+
+// After a class schedule changes, offer to clear future shifts that no longer match.
+function promptReconcileCleanup(levelRef, orph) {
+  const assignedNote = orph.assigned > 0
+    ? `<p class="small" style="color:var(--amber);margin-top:8px">⚠ ${orph.assigned} ${orph.assigned === 1 ? "is" : "are"} already assigned to staff — they'll be notified their shift was cancelled.</p>`
+    : "";
+  const sheet = openSheet(`
+    <h2 style="margin-bottom:6px">Remove leftover shifts?</h2>
+    <p class="small muted">This change left <strong>${orph.total}</strong> future shift${orph.total !== 1 ? "s" : ""} on the rota that no longer match this class.</p>
+    ${assignedNote}
+    <div style="display:flex;gap:10px;margin-top:18px">
+      <button class="btn danger" id="rc-yes">Remove ${orph.total} shift${orph.total !== 1 ? "s" : ""}</button>
+      <button class="btn ghost" id="rc-no">Keep them</button>
+    </div>`);
+  const done = () => { closeSheet(); manageClasses(); };
+  sheet.querySelector("#rc-no").addEventListener("click", done);
+  sheet.querySelector("#rc-yes").addEventListener("click", async (e) => {
+    e.target.disabled = true; e.target.textContent = "Removing…";
+    try {
+      const r = await api(`/api/class-schedules/level/${levelRef}/reconcile`, { method: "POST" });
+      toast(`Removed ${r.removed} leftover shift${r.removed !== 1 ? "s" : ""}`, "ok");
+    } catch (err) { toast(err.message, "err"); }
+    done();
+  });
 }
 
 // ------------------------------------------------------------------ ADMIN DAY VIEW
