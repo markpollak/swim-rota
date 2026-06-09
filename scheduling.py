@@ -99,18 +99,20 @@ def generate_from_schedules(conn, from_date: date, to_date: date) -> int:
                           r["role_id"], r["level_name"], r["user_id"], now, now, r["schedule_id"]))
                     created += 1
             else:
-                # Open slot — count all existing slots at this time/level/role
+                # Count existing SCHEDULE-originated slots at this time/level/role
+                # (active or soft-deleted). Ad-hoc/detached one-offs are excluded so
+                # they don't accidentally suppress the class's own generation.
                 if r["level_id"] is None:
                     existing = conn.execute("""
                         SELECT COUNT(*) c FROM slots
                         WHERE date=? AND start_time=? AND end_time=?
-                        AND level_id IS NULL AND role_id=?
+                        AND level_id IS NULL AND role_id=? AND source_schedule_id IS NOT NULL
                     """, (iso, r["start_time"], r["end_time"], r["role_id"])).fetchone()["c"]
                 else:
                     existing = conn.execute("""
                         SELECT COUNT(*) c FROM slots
                         WHERE date=? AND start_time=? AND end_time=?
-                        AND level_id=? AND role_id=?
+                        AND level_id=? AND role_id=? AND source_schedule_id IS NOT NULL
                     """, (iso, r["start_time"], r["end_time"],
                           r["level_id"], r["role_id"])).fetchone()["c"]
                 need = r["count"] - existing
@@ -129,9 +131,14 @@ def extend_to_horizon(conn, weeks: int = 26) -> int:
     """Ensure slots exist for the next `weeks` weeks (~6 months). Idempotent."""
     today = date.today()
     horizon = today + timedelta(weeks=weeks)
-    # Quick check: if we already have slots that far out, skip
+    # Quick check: skip only if the *schedule/template-generated* slots already reach
+    # the horizon. Ad-hoc one-offs and soft-deleted tombstones are excluded, so a
+    # stray far-future shift can't stall the rolling roll-forward.
     furthest = conn.execute(
-        "SELECT MAX(date) d FROM slots WHERE date >= ?", (today.isoformat(),)
+        """SELECT MAX(date) d FROM slots
+           WHERE date >= ? AND deleted_at IS NULL
+           AND (template_id IS NOT NULL OR source_schedule_id IS NOT NULL)""",
+        (today.isoformat(),)
     ).fetchone()["d"]
     if furthest and furthest >= horizon.isoformat():
         return 0

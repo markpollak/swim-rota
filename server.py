@@ -183,6 +183,10 @@ def _login_blocked(ip: str) -> bool:
 
 def _login_record_fail(ip: str):
     _login_fails.setdefault(ip, []).append(time.time())
+    if len(_login_fails) > 500:  # opportunistic sweep so stale IPs don't accumulate
+        now = time.time()
+        for k in [k for k, v in _login_fails.items() if not v or now - v[-1] > LOGIN_WINDOW]:
+            _login_fails.pop(k, None)
 
 
 # ----------------------------------------------------------------------------
@@ -350,6 +354,9 @@ def check_double_book(conn, user_id, slot, exclude_id=None):
 
 
 def check_qualified(conn, user_id, slot):
+    u = conn.execute("SELECT active FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not u or not u["active"]:
+        raise HTTPException(400, "That staff member is no longer active.")
     role = conn.execute("SELECT * FROM roles WHERE id = ?", (slot["role_id"],)).fetchone()
     has = conn.execute("SELECT 1 FROM user_roles WHERE user_id = ? AND role_id = ?",
                        (user_id, slot["role_id"])).fetchone()
@@ -452,7 +459,7 @@ async def release_slot(slot_id: int, request: Request, user=Depends(current_user
         s = conn.execute(
             """SELECT s.*, l.name level_name, r.name role_name
                FROM slots s LEFT JOIN levels l ON l.id=s.level_id
-               JOIN roles r ON r.id=s.role_id WHERE s.id=?""", (slot_id,)).fetchone()
+               JOIN roles r ON r.id=s.role_id WHERE s.id=? AND s.deleted_at IS NULL""", (slot_id,)).fetchone()
         if not s:
             raise HTTPException(404, "Shift not found")
         s = dict(s)
@@ -598,6 +605,10 @@ async def create_slot(request: Request, admin=Depends(require_admin)):
     with db.get_db() as conn:
         lvl = conn.execute("SELECT name FROM levels WHERE id=?", (b.get("level_id"),)).fetchone()
         role = conn.execute("SELECT name FROM roles WHERE id=?", (b["role_id"],)).fetchone()
+        if not role:
+            raise HTTPException(400, "Unknown role.")  # else the slot would be invisible (roles are inner-joined)
+        if b.get("level_id") and not lvl:
+            raise HTTPException(400, "Unknown class/level.")
         cur = conn.execute(
             """INSERT INTO slots (date, start_time, end_time, level_id, role_id, label, notes, status)
                VALUES (?,?,?,?,?,?,?, 'open')""",
@@ -841,6 +852,21 @@ async def update_user(user_id: int, request: Request, admin=Depends(require_admi
         if "password" in b and b["password"]:
             conn.execute("UPDATE users SET password_hash=? WHERE id=?",
                          (auth.hash_password(b["password"]), user_id))
+        # Deactivation: free up their future shifts so the rota doesn't keep showing
+        # phantom cover by someone who has left.
+        if "active" in b and not b["active"]:
+            rel = conn.execute(
+                """UPDATE slots SET assigned_user_id=NULL, status='open',
+                       requested_at=NULL, decided_at=NULL, decided_by=NULL
+                   WHERE assigned_user_id=? AND date>=? AND deleted_at IS NULL
+                   AND status IN ('requested','approved')""",
+                (user_id, today_iso()))
+            if rel.rowcount:
+                nm = conn.execute("SELECT full_name FROM users WHERE id=?", (user_id,)).fetchone()
+                notify_admins(conn,
+                    f"{rel.rowcount} shift{'s' if rel.rowcount != 1 else ''} re-opened after "
+                    f"{(nm['full_name'] if nm else 'a staff member')} was deactivated — please re-fill.",
+                    "reports")
         if "role_ids" in b:
             old_roles = {r["role_id"] for r in conn.execute(
                 "SELECT role_id FROM user_roles WHERE user_id=?", (user_id,)).fetchall()}

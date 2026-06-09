@@ -431,3 +431,35 @@ def test_reconcile_keep_booked_detaches_approved_only():
         # the pending requester was notified their request was cancelled
         assert conn.execute("SELECT COUNT(*) c FROM notifications WHERE user_id=? AND message LIKE '%cancelled%'",
                             (u_req,)).fetchone()["c"] >= 1
+
+
+# ===================================== deactivation frees future shifts (M1)
+def test_deactivating_user_releases_future_shifts():
+    role = _seed_base()
+    admin = _make_admin("boss9", "rightpass1"); atok = auth.make_token(admin)
+    (uid,) = _make_users(role, 1)
+    past = (date.today() - timedelta(days=3)).isoformat()
+    with db.get_db() as conn:
+        def ins(status, d, t):
+            return conn.execute(
+                "INSERT INTO slots (date,start_time,end_time,role_id,status,assigned_user_id) VALUES (?,?,?,?,?,?)",
+                (d, t, t.replace(":0", ":3"), role, status, uid)).lastrowid
+        s_app = ins("approved", FUTURE, "10:00")
+        s_req = ins("requested", FUTURE, "11:00")
+        s_past = ins("approved", past, "10:00")
+
+    assert _api("PATCH", f"/api/users/{uid}", atok, {"active": False})[0] == 200
+
+    with db.get_db() as conn:
+        for sid in (s_app, s_req):
+            row = conn.execute("SELECT status, assigned_user_id FROM slots WHERE id=?", (sid,)).fetchone()
+            assert row["status"] == "open" and row["assigned_user_id"] is None, \
+                f"future shift {sid} should be released: {dict(row)}"
+        past_row = conn.execute("SELECT assigned_user_id FROM slots WHERE id=?", (s_past,)).fetchone()
+        assert past_row["assigned_user_id"] == uid, "past shift should be left assigned"
+    # and you can no longer assign a fresh shift to the deactivated user
+    with db.get_db() as conn:
+        s_new = conn.execute(
+            "INSERT INTO slots (date,start_time,end_time,role_id,status) VALUES (?,?,?,?, 'open')",
+            (FUTURE, "14:00", "14:30", role)).lastrowid
+    assert _api("POST", f"/api/slots/{s_new}/assign", atok, {"user_id": uid})[0] == 400

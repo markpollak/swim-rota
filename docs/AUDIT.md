@@ -306,3 +306,44 @@ When removing/reducing a class, the cleanup prompt now offers a **"Keep shifts s
 - **approved** (booked) → if kept, the shift is **detached** (`source_schedule_id` cleared) so it stays on the calendar as a standalone one-off (no notification, never regenerated/reconciled again); if not kept, removed + notified.
 
 Endpoint: `POST …/reconcile?keep_booked=1`. `set_level_schedule` now returns the orphan breakdown `{open, requested, approved, ...}` so the prompt can show the split and only surface the checkbox when staff are actually booked. Test: `test_reconcile_keep_booked_detaches_approved_only` (12 total).
+
+---
+
+## L. Review 4 — fresh-eyes pass (full re-read)
+
+A clean read of the current `server.py` / `scheduling.py`. No critical bugs; the soft-delete `deleted_at` filtering is consistent across every slot query, the booking races stay guarded, and the reconcile/keep-booked logic is sound. New findings:
+
+### 🟠 M1 — Deactivating a staff member doesn't free their future shifts
+`update_user` (active=0) marks the person inactive + sets `deleted_at`, but **leaves all their future shifts assigned to them**. The rota then shows those shifts as covered by someone who has left: they never reopen, they still count in `report_coverage` and `check_double_book`, and an admin has to hunt down and release each one. *Fix:* on deactivation, release the user's future `requested`/`approved` shifts (back to open) and flag the new gaps to admins. (The same gap applies when an admin removes a role the user still holds shifts for — those shifts aren't re-validated.)
+
+### 🟡 L1 — `extend_to_horizon` roll-forward can stall on a far-future shift
+The "is the horizon already generated?" check is `MAX(date) FROM slots WHERE date >= today` over **all** slots — including ad-hoc one-offs and soft-deleted tombstones. A single shift dated *beyond* the 26-week horizon makes the daily/startup generation **skip entirely** until the rolling horizon catches up, which could leave a gap in regularly-scheduled shifts in between. (The explicit "Generate" button bypasses this, so adding a class still works.) *Fix:* base the check on schedule/template-generated, non-deleted slots (`(template_id IS NOT NULL OR source_schedule_id IS NOT NULL) AND deleted_at IS NULL`).
+
+### 🟡 L2 — `create_slot` doesn't validate `role_id`/`level_id`
+An unknown `role_id` produces a slot that's **invisible** (the main slot query inner-joins `roles`, dropping it). Admin-only and unlikely, but should 400 on an unknown role.
+
+### 🟢 L3 — `release_slot` reads the slot without the `deleted_at IS NULL` filter
+Inconsistent with `_get_slot` and every other handler; an admin could "release" a soft-deleted slot via the raw API (harmless — it stays hidden). One-line consistency fix.
+
+### 🟢 L4 — `_login_fails` rate-limit map grows unbounded
+An IP that fails once and never returns leaves a stale entry forever (the per-IP list is only pruned when that IP is seen again or logs in). On a long-running single worker this is a slow, tiny memory creep. *Fix:* opportunistic sweep of stale buckets.
+
+### 🟢 L5 — generation existence-count includes ad-hoc/detached shifts
+For a scheduled day/time/role, the "how many already exist?" count includes ad-hoc and detached one-offs, so adding a one-off at a *scheduled* slot suppresses the scheduled one for that date. Obscure; usually harmless (a slot does exist there).
+
+### 🟢 L6 — shifts can be assigned to a deactivated user
+`check_qualified` doesn't check `active`, so `assign`/`bulk-assign` can put a shift on a deactivated person (who can't see it). Minor; add an active check on assign.
+
+**Carry-over (unchanged, mostly by design):** no enforced FK constraints (C3); single-worker SSE ceiling (E1); per-request user lookup. **Confirmed healthy:** consistent `deleted_at` filtering, guarded booking races, parameterised SQL, escaped output, security headers, rate-limiting, forced password change, timezone-correct dates.
+
+**Priority:** M1 is the only one with day-to-day operational impact; L1 is a real (if hard-to-trigger) correctness flaw; the rest are small hardening. None block production.
+
+### ✅ Review 4 — all fixed
+
+- **M1** — deactivating a user now releases their future `requested`/`approved` shifts back to open and notifies admins of the gaps (`update_user`); and `check_qualified` now refuses to assign to an inactive user (covers L6).
+- **L1** — `extend_to_horizon` quick-check now counts only schedule/template-generated, non-deleted slots, so a stray far-future shift can't stall the roll-forward.
+- **L2** — `create_slot` returns 400 on an unknown `role_id`/`level_id` (no more invisible slots).
+- **L3** — `release_slot` now filters `deleted_at IS NULL` like every other handler.
+- **L4** — `_login_fails` is swept opportunistically (bounded memory).
+- **L5** — the schedule generator's existence-count now ignores ad-hoc/detached one-offs, so a one-off at a scheduled time no longer suppresses the class's own shift.
+- Tests: +1 (`test_deactivating_user_releases_future_shifts`); **13 total, all green.** Backend-only, no service-worker bump.
