@@ -307,6 +307,7 @@ def test_schedule_edit_reconciles_orphaned_shifts_but_spares_adhoc():
         # an AD-HOC slot (no source schedule) at a different time — must NEVER be swept up
         adhoc = conn.execute("INSERT INTO slots (date,start_time,end_time,level_id,role_id,status,source_schedule_id) "
                              "VALUES (?,?,?,?,?, 'open', NULL)", (FUTURE, "16:00", "16:30", lvl, role)).lastrowid
+        server.ensure_dm_channels(conn)  # give the worker a DM channel for the cancellation message
 
     # remove the class's whole schedule → set_level_schedule reports the orphans
     st, resp = _api("PUT", f"/api/class-schedules/level/{lvl}", atok, {"sessions": []})
@@ -325,3 +326,8 @@ def test_schedule_edit_reconciles_orphaned_shifts_but_spares_adhoc():
             "ad-hoc slot must not be touched"
         assert conn.execute("SELECT COUNT(*) c FROM notifications WHERE user_id=? AND message LIKE '%cancelled%'",
                             (uid,)).fetchone()["c"] >= 1, "assigned worker should be notified"
+        # ...and should get a DM from the admin in their messages
+        assert conn.execute(
+            """SELECT COUNT(*) c FROM messages m JOIN channels ch ON ch.id=m.channel_id
+               WHERE ch.dm_user_id=? AND ch.type='dm' AND m.user_id=? AND m.body LIKE '%cancelled%'""",
+            (uid, admin)).fetchone()["c"] >= 1, "worker should get a cancellation DM from the admin"

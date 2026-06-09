@@ -1154,35 +1154,63 @@ async def set_level_schedule(level_ref: str, request: Request, admin=Depends(req
 @app.post("/api/class-schedules/level/{level_ref}/reconcile")
 def reconcile_level_schedule(level_ref: str, admin=Depends(require_admin)):
     """Remove leftover future shifts for a level that no longer match its schedule.
-    Open ones are soft-deleted; assigned ones are released (the worker is notified)
-    then soft-deleted. Ad-hoc shifts are never touched."""
+    Open ones are soft-deleted; assigned ones are released, then the worker gets a
+    bell notification AND a direct message from the admin listing the cancelled
+    shifts. Ad-hoc shifts are never touched."""
     if level_ref == "duty":
         level_id = None
     elif level_ref.isdigit():
         level_id = int(level_ref)
     else:
         raise HTTPException(400, "level_ref must be a level id or 'duty'.")
+    from datetime import datetime as _dt
     removed_open = removed_assigned = 0
-    affected: dict = {}  # user_id -> count, for one summary notification each
+    affected: dict = {}  # user_id -> [shift description strings]
+    dms = []             # (channel_id, message_id, body) to fan out after commit
     with db.get_db_immediate() as conn:
         orphans = _level_orphan_slots(conn, level_id)
         for o in orphans:
             if o["assigned_user_id"]:
-                affected[o["assigned_user_id"]] = affected.get(o["assigned_user_id"], 0) + 1
+                try:
+                    date_str = _dt.strptime(o["date"], "%Y-%m-%d").strftime("%A %-d %B")
+                except Exception:
+                    date_str = o["date"]
+                affected.setdefault(o["assigned_user_id"], []).append(
+                    f"{date_str} {o['start_time']}–{o['end_time']}")
                 removed_assigned += 1
             else:
                 removed_open += 1
             conn.execute(
                 "UPDATE slots SET deleted_at=?, deleted_by=?, assigned_user_id=NULL, status='open' WHERE id=?",
                 (now_iso(), admin["id"], o["id"]))
-        for uid, cnt in affected.items():
+        for uid, shifts in affected.items():
+            cnt = len(shifts)
             notify_user(conn, uid,
                 f"{cnt} of your shift{'s' if cnt > 1 else ''} "
-                f"{'were' if cnt > 1 else 'was'} cancelled because a class schedule changed.")
+                f"{'were' if cnt > 1 else 'was'} cancelled — see your messages for details.")
+            # DM from the admin into the person's DM channel (shows up in Messages)
+            shown = shifts[:12]
+            more = cnt - len(shown)
+            body = (f"Your shift{'s' if cnt > 1 else ''} below "
+                    f"{'were' if cnt > 1 else 'was'} cancelled because a class schedule changed:\n"
+                    + "\n".join(f"• {s}" for s in shown)
+                    + (f"\n…and {more} more" if more > 0 else ""))
+            dm_ch = conn.execute(
+                "SELECT id FROM channels WHERE dm_user_id=? AND type='dm' AND active=1", (uid,)).fetchone()
+            if dm_ch:
+                cur = conn.execute(
+                    "INSERT INTO messages (channel_id, user_id, body, sent_at) VALUES (?,?,?,?)",
+                    (dm_ch["id"], admin["id"], body, now_iso()))
+                dms.append((dm_ch["id"], cur.lastrowid, body))
         if orphans:
             _audit(conn, admin["id"], "shifts", "schedule_reconcile",
                    f"{len(orphans)} leftover shift{'s' if len(orphans) != 1 else ''} removed "
                    f"({removed_assigned} assigned)")
+    # Push each DM in real time once the transaction has committed.
+    for cid, mid, body in dms:
+        _fanout(cid, {"id": mid, "channel_id": cid, "body": body, "sent_at": now_iso(),
+                      "user_id": admin["id"], "full_name": admin["full_name"],
+                      "username": admin["username"]})
     return {"ok": True, "removed_open": removed_open,
             "removed_assigned": removed_assigned, "removed": removed_open + removed_assigned}
 
