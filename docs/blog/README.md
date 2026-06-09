@@ -1,6 +1,8 @@
-# Arc Swim Rota — blog deliverables
+# Staff Pool Rota — blog deliverables
 
-Two versions of the same article about building the app with Claude Code, plus the screenshots.
+Versions of the article about building the app with Claude Code, plus the screenshots.
+
+> **Most up to date:** [`arc-swim-rota-post.html`](arc-swim-rota-post.html) is the **current** post — refreshed for the “Staff Pool Rota” rebrand, the Delete-Shifts feature and the Cloudflare launch, with re-captured new-brand screenshots. The Markdown and Gutenberg versions still carry the earlier (pre-rebrand) narrative and can be refreshed on request.
 
 | File | What it is | How to use it |
 |------|------------|---------------|
@@ -35,7 +37,9 @@ Two versions of the same article about building the app with Claude Code, plus t
 | `10-shifts-week.png` | Week timetable grid | ✅ |
 | `11-myshifts.png` | My Shifts | — (spare) |
 | `12-profile.png` | Staff profile / training | ✅ |
-| `13-pending-requester.png` | Pending-requester modal (latest feature) | ✅ |
+| `13-pending-requester.png` | Pending-requester modal | ✅ |
+| `14-force-password.png` | Forced password-change screen | ✅ |
+| `16-rota-delete.png` | Delete-Shifts mode (newest feature) | ✅ |
 
 The three “spare” shots (`02`, `07`, `11`) aren’t embedded in the article but are included if you want to swap any in.
 

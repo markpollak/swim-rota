@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Building a Swim-Club Rota App in Four Days with Claude Code</title>
-<meta name="description" content="How a deployable, installable staff-scheduling PWA for a leisure-centre pool came together in four days of pair-programming with Claude Code." />
+<title>Building (and Shipping) a Pool-Staff Rota App with Claude Code</title>
+<meta name="description" content="How a deployable, installable staff-scheduling PWA for a leisure-centre pool went from empty folder to live site — pair-programmed with Claude Code." />
 <style>
   :root{
     --blue:#26358B; --blue-deep:#1b2767; --magenta:#A4358B; --teal:#0E9F8E;
@@ -120,11 +120,11 @@
 <header class="hero">
   <div class="wrap">
     <span class="eyebrow">Build notes · Claude Code</span>
-    <h1>Building a swim-club rota app in four days with Claude&nbsp;Code</h1>
-    <p class="lede">From an empty folder to a deployed, installable staff-scheduling app for a leisure-centre pool — pair-programmed end to end.</p>
+    <h1>Building (and shipping) a pool-staff rota app with Claude&nbsp;Code</h1>
+    <p class="lede">From an empty folder to a live, installable staff-scheduling app for a leisure-centre pool — pair-programmed end to end, then hardened and launched behind Cloudflare.</p>
     <div class="meta">
-      <span>🗓️ 4–8 June 2026</span>
-      <span>⏱️ ~10 min read</span>
+      <span>🗓️ June 2026</span>
+      <span>⏱️ ~12 min read</span>
       <span>🧰 FastAPI · SQLite · vanilla JS PWA</span>
     </div>
   </div>
@@ -132,9 +132,9 @@
 
 <div class="wrap">
   <div class="stats">
-    <div class="stat"><b>4</b><span>days, start to deployed</span></div>
-    <div class="stat"><b>~50</b><span>commits</span></div>
-    <div class="stat"><b>5,300</b><span>lines of code</span></div>
+    <div class="stat"><b>4</b><span>days to first deploy</span></div>
+    <div class="stat"><b>60+</b><span>commits</span></div>
+    <div class="stat"><b>~5,900</b><span>lines of code</span></div>
     <div class="stat"><b>0</b><span>build steps</span></div>
   </div>
 </div>
@@ -142,13 +142,13 @@
 <div class="wrap">
 <article>
 
-  <p>Every leisure centre runs on a rota, and almost every rota runs on a tired spreadsheet and a long email chain. The pool at <strong>The Arc, Matlock</strong> is no different: swim teachers and lifeguards need slotting into half-hour poolside sessions, lifeguards must hold in-date training, and somebody has to approve it all and chase the gaps.</p>
+  <p>Every leisure centre runs on a rota, and almost every rota runs on a tired spreadsheet and a long email chain. A swimming pool is a tricky case: swim teachers and lifeguards need slotting into half-hour poolside sessions, lifeguards must hold in-date training, and somebody has to approve it all and chase the gaps.</p>
 
-  <p>I wanted to see how far I could get building a proper replacement — not a prototype, a <em>deployable</em> app — with <strong>Claude Code</strong> as my pair programmer. Four days later, <strong>Arc Swim Rota</strong> is a mobile-first Progressive Web App that staff install on their phones, request shifts from, and message each other in, and that admins run the whole rota from.</p>
+  <p>I wanted to see how far I could get building a proper replacement — not a prototype, a <em>deployable</em> app — with <strong>Claude Code</strong> as my pair programmer. It started life as a build for one specific leisure-centre pool, then got generalised into <strong>Staff Pool Rota</strong>: a mobile-first Progressive Web App that staff install on their phones, request shifts from, and message each other in, that admins run the whole rota from — and which now runs live on a public domain behind Cloudflare.</p>
 
   <figure>
-    <img src="img/01-login.png" alt="Arc Swim Rota login screen" />
-    <figcaption>The branded, installable login screen — deep blue and magenta, straight from Freedom Leisure’s palette.</figcaption>
+    <img src="img/01-login.png" alt="Staff Pool Rota login screen" />
+    <figcaption>The installable login screen — deep blue and magenta, and (after a security pass) no demo credentials on show.</figcaption>
   </figure>
 
   <hr class="div" />
@@ -211,6 +211,10 @@
     <figure><img src="img/12-profile.png" alt="Staff profile"/><figcaption>Each staff member records their own training expiry.</figcaption></figure>
   </div>
 
+  <p>A rota you can only ever <em>add</em> to gets unwieldy fast, so a later round added the other half: a <strong>Delete-Shifts mode</strong>. Flip the toggle and the same grid becomes an eraser — only open (unassigned) shifts are selectable, you batch-select them, and a confirmation step removes them. Under the hood they're <strong>soft-deleted</strong> (the row is kept and hidden) so the weekly generator doesn't just recreate them on its next pass. Admins can also tweak the weekly class schedule and drop a one-off class straight onto the grid.</p>
+
+  <figure><img src="img/16-rota-delete.png" alt="Delete-shifts mode in the rota builder"/><figcaption>Delete-Shifts mode: the rota builder becomes an eraser for open shifts, with a guarded confirmation step.</figcaption></figure>
+
   <h2><span class="num">06</span>Where Claude Code shone — and where I steered</h2>
   <p><strong>It shone at breadth.</strong> A single instruction could touch the data layer, an API endpoint and several render functions at once and come back coherent. Holding a 2,700-line vanilla-JS SPA <em>and</em> a FastAPI backend in view at the same time is exactly the context-juggling that’s tedious for a human and natural for the model.</p>
   <p><strong>It shone at the unglamorous 80%.</strong> Docker, the Caddy config, the deploy script, the seeder, the service worker, the docs — all the scaffolding that makes something <em>deployable</em> rather than just <em>runnable</em>.</p>
@@ -230,8 +234,12 @@
 
   <figure><img src="img/14-force-password.png" alt="Forced password change screen"/><figcaption>Accounts still on a default password are made to set a new one before they can use the app.</figcaption></figure>
 
+  <h3>Going live</h3>
+  <p>The final step was a real home. The app now runs on a public domain behind <strong>Cloudflare</strong>, with a Cloudflare <em>Origin Certificate</em> so the edge-to-server hop is encrypted too (Cloudflare’s “Full (strict)” mode) and the security headers above doing their job over real HTTPS — which is also what lets staff “install” the PWA to a phone home screen. Deploys stay a one-liner: push to GitHub, then a single SSH command rebuilds the container and restarts.</p>
+  <p>And the auditing never really stops. Every new feature gets re-checked — when the Delete-Shifts feature went in, the follow-up review was about making sure a “deleted” shift truly disappears <em>everywhere</em> (reports and counts included), not just from the calendar. That ongoing “but what about…” pass is, honestly, where a lot of the real quality comes from.</p>
+
   <h2><span class="num">08</span>So — is it production-ready?</h2>
-  <p>For its actual job — one pool, a few dozen staff, a handful online at once — it’s <strong>deployed and ready</strong>. The architecture is clean, the security fundamentals are in place, and the feature set is genuinely complete.</p>
+  <p>For its actual job — one pool, a few dozen staff, a handful online at once — it’s <strong>live and ready</strong>. The architecture is clean, the security fundamentals are in place, and the feature set is genuinely complete.</p>
 
   <div class="verdict">
     <div class="vc good">
@@ -255,7 +263,7 @@
   <p>SQLite and a single server are the right call here, not a compromise — and there’s a clear path to a bigger product if it’s ever needed. But that’s a <em>next-product</em> problem, not today’s.</p>
 
   <h2><span class="num">09</span>The takeaway</h2>
-  <p>Four days, around fifty commits, one collaborator that never tired of an “actually, can we make the amber a little less aggressive” request. Claude Code didn’t just autocomplete functions — it scaffolded the project, carried the architecture across dozens of sessions, wrote the deploy pipeline, and turned a vague brief into something a leisure centre can genuinely run on.</p>
+  <p>A first working version in four days, sixty-plus commits and counting, one collaborator that never tired of an “actually, can we make the amber a little less aggressive” request. Claude Code didn’t just autocomplete functions — it scaffolded the project, carried the architecture across dozens of sessions, wrote the deploy pipeline, generalised the whole thing from one pool into a reusable product, and helped harden and ship it to a live domain.</p>
   <p>The lesson isn’t “AI writes the code for you.” It’s that the bottleneck moves. With the typing and boilerplate handled, what’s left is the part that was always the actual job: deciding what to build, having the taste to know when it’s right, and the discipline to ask “but is it correct when everyone uses it at once?”</p>
   <p>That, it turns out, is a pretty good division of labour.</p>
 
@@ -266,7 +274,7 @@
   <div class="wrap">
     <span class="badge">
       <svg class="wave" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="48" height="48" rx="11" fill="#26358B"/><path d="M7 22c4-4 7-4 11 0s7 4 11 0 7-4 11 0" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M7 30c4-4 7-4 11 0s7 4 11 0 7-4 11 0" stroke="#A4358B" stroke-width="3" stroke-linecap="round"/></svg>
-      Arc Swim Rota
+      Staff Pool Rota
     </span>
     <span>Built with FastAPI, SQLite &amp; vanilla JavaScript — and Claude Code.</span>
   </div>

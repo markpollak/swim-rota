@@ -218,3 +218,45 @@ Two commits landed after the initial review, both **frontend-only**:
 **One interaction worth flagging:** feature `acd1c07` makes the **C1 race more visible**. The new "pending requester" panel shows whoever the *last write* recorded as the requester. Under the lost-update race in C1, if two staff request the same open slot simultaneously, the person who "lost" the write will see *someone else* named as the requester even though their own request returned success. So the feature is correct given the data — it just faithfully displays the symptom of the underlying race. **This is another reason to prioritise the C1 fix:** it now has a user-facing surface where the inconsistency can be noticed.
 
 Re-verified unchanged and still applicable: **C1, C2** (`server.py:290/358/416/517`, unguarded `WHERE id=?`), **C4–C6**, **D1**, **D2** (`server.py:537/827/953/1235`), **E1/E2**, **F1** (still no tests). Corrected: **D3** (now confirmed fully implemented). Widened: **D4** (cache drift v33→v47).
+
+---
+
+## K. Review 3 — current state (post-rebrand, class-deletion, Cloudflare launch)
+
+*Re-audited at HEAD `99e0d9b`. Since Review 2 the app was renamed **Arc Swim Rota → "Staff Pool Rota"**, went live on **cmwebstats.com behind Cloudflare**, and gained a **delete-shifts / soft-delete** feature, a **schedule-editor**, a widescreen/print rota and per-user rota short-names. The Review 1–2 verdict still holds; the items below are **new** and centre on the deletion feature and the production deployment. No app code was changed in this review.*
+
+### Soft-delete / "deleting classes"
+
+The design soft-deletes slots (`slots.deleted_at`/`deleted_by`), hides them via `SLOT_SELECT … WHERE s.deleted_at IS NULL`, and suppresses regeneration by having the generator's COUNT queries *include* tombstones. That core idea is sound, and `list_slots`/`slots_week`/outstanding correctly switched their appended filters to `AND`. But not every `slots` query got the filter:
+
+- **🔴 S1 — Coverage report counts deleted shifts.** `report_coverage` (`server.py` ~`1112`) runs `… FROM slots WHERE date >= ? AND date <= ?` with **no `deleted_at IS NULL`**. Deleted slots stay `status='open'`, so every deleted class keeps inflating the day's **total** and **open** counts forever — coverage % reads low and "unfilled" is overstated. It directly contradicts the Outstanding report (which hides them). Most user-visible bug from the new feature. *Fix:* add `AND deleted_at IS NULL`.
+
+- **🟠 S2 — Booking actions can act on a deleted slot.** `_get_slot` (`server.py:407`) doesn't filter `deleted_at`, and the conditional UPDATEs in `request_slot`, `assign_slot` and `bulk_assign` guard only `status='open'`. A soft-deleted slot is still `status='open'`, so a request/assign that races an admin deletion (or fires from a stale tab) **succeeds on a deleted slot** → an *invisible* pending/approved shift (hidden by `SLOT_SELECT`) that no admin can see or approve, and which then registers in `check_double_book` and blocks the worker from other shifts at that time. *Fix:* add `AND deleted_at IS NULL` to those guards.
+
+- **🟡 S3 — Deletion isn't lock-serialised.** `delete_slot` / `bulk_delete` use `get_db()` (not `get_db_immediate`) and an unconditional UPDATE, so a claim-vs-delete race on the same open slot can interleave into the same deleted+assigned state as S2. *Fix:* use `get_db_immediate` + `WHERE status='open' AND deleted_at IS NULL` with a rowcount check.
+
+- **🟠 S4 — Editing/removing a class leaves up to 26 weeks of orphaned slots.** `set_level_schedule` deletes the `class_schedules` rows but **never touches already-materialised `slots`**, and the generator only ever *adds*. So removing a class from the weekly schedule does **not** remove its existing future slots; **changing a class's time produces duplicates** (old orphans + new). The admin must then hunt them down in Delete-Shifts mode. Very likely to be hit. *Suggestion:* when a schedule entry is removed/changed, offer to soft-delete the affected **future open** slots (leaving assigned ones for manual handling), or show a clear "N future slots still exist — remove them?" prompt.
+
+- **🟡 S5 — Soft-deletes are permanent, accumulate, and have no undo.** Regeneration suppression relies on keeping tombstones forever, so they can't be purged (purging would let the generator recreate them), and a mis-clicked bulk-delete is unrecoverable without DB surgery (the confirmation honestly says "can't be undone"). *Suggestions:* a "Recently deleted → restore" admin view (restore = clear `deleted_at`), and/or a documented nightly purge of tombstones strictly older than the generation horizon.
+
+- **🟡 S6 — No real "delete a class/level"; deactivation is incomplete.** `update_level` only toggles `active`. A deactivated level still (a) shows on existing slots (`SLOT_SELECT` joins `levels` without an active filter) and (b) keeps generating (`generate_from_schedules` filters `class_schedules.active`, not `levels.active`). *Fix/Doc:* filter generation by `levels.active`, or document that retiring a class means clearing its schedule **and** deleting its future slots.
+
+### Cloudflare / production deployment
+
+- **🟠 P1 — Login rate-limit uses a spoofable/shared IP behind Cloudflare.** `_client_ip` takes the first `X-Forwarded-For` value. Behind the orange cloud this is either (a) **client-spoofable** — rotate the first XFF entry and the per-IP limit is bypassed — or (b) **collapsed to Cloudflare's edge IP**, so 10 bad logins lock out *all* staff at once, depending on Caddy's `trusted_proxies`. *Fix:* trust **`CF-Connecting-IP`** when proxied (Cloudflare sets it and strips client copies), and/or set Caddy `trusted_proxies` to Cloudflare ranges and use its resolved client IP.
+
+- **🟠 P2 — Origin reachable directly, bypassing Cloudflare.** `docs/LAUNCH-cmwebstats.md` opens droplet `80/443` to the world. On the proxied setup, anyone who finds the origin IP (`165.232.96.67`) can hit it directly, skipping Cloudflare's WAF/DDoS and breaking real-IP handling. *Fix:* restrict origin `80/443` to **Cloudflare IP ranges** (ufw / DO Cloud Firewall) or use a **Cloudflare Tunnel**.
+
+- **🟢 P3 — doc nit.** `Caddyfile.cloudflare`'s comment says the cert lives at `certs/cmwebstats.pem`, but the `tls` directive (correctly) uses `cert.pem`/`cert.key`. Harmless; align the comment.
+
+### Confirmed healthy in this review
+- Race fix (C1/C2) intact; the delete-mode **frontend** is well-built (permanent delegated handler survives `rotaBuilder` rebuilds; only open cells selectable; confirmation sheet) — the earlier stale-closure fixes landed cleanly.
+- `SLOT_SELECT` `WHERE`→`AND` migration is correct in the appended-filter queries.
+- Cloudflare **Full (strict)** + origin cert + the full security-header set is a good production posture (the doc correctly warns against *Flexible* SSL).
+- All Review-2 hardening (rate-limit *logic*, CSP, forced password change, timezone, hidden demo creds) is present and compiles.
+
+### Suggested priority order
+1. **S1** (coverage filter) and **S2** (`deleted_at` guards on request/assign/bulk-assign) — small, high-value correctness fixes; add a test that a deleted slot is uncountable and unclaimable.
+2. **P1 / P2** — Cloudflare real-IP + origin firewall (security of the live box).
+3. **S4** — reconcile future slots on schedule edits (biggest day-to-day surprise).
+4. **S3, S5, S6** — deletion concurrency, restore/purge, level retirement.
