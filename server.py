@@ -1057,6 +1057,40 @@ def get_class_schedules(admin=Depends(require_admin)):
         return db.dict_rows(rows)
 
 
+def _level_schedule_signatures(conn, level_id):
+    """Current (weekday, start, end, role_id) sessions scheduled for this level."""
+    if level_id is None:
+        rows = conn.execute("""SELECT cs.weekday, cs.start_time, cs.end_time, ss.role_id
+            FROM class_schedules cs JOIN schedule_staff ss ON ss.schedule_id=cs.id
+            WHERE cs.level_id IS NULL AND cs.active=1""").fetchall()
+    else:
+        rows = conn.execute("""SELECT cs.weekday, cs.start_time, cs.end_time, ss.role_id
+            FROM class_schedules cs JOIN schedule_staff ss ON ss.schedule_id=cs.id
+            WHERE cs.level_id=? AND cs.active=1""", (level_id,)).fetchall()
+    return {(r["weekday"], r["start_time"], r["end_time"], r["role_id"]) for r in rows}
+
+
+def _level_orphan_slots(conn, level_id):
+    """Future, non-deleted, SCHEDULE-GENERATED slots for this level whose
+    (weekday, start, end, role) no longer matches any current scheduled session.
+    Ad-hoc / template slots (source_schedule_id IS NULL) are never included, so a
+    schedule edit can't sweep away one-off shifts."""
+    today = today_iso()
+    if level_id is None:
+        rows = conn.execute("""SELECT * FROM slots WHERE level_id IS NULL AND date >= ?
+            AND deleted_at IS NULL AND source_schedule_id IS NOT NULL""", (today,)).fetchall()
+    else:
+        rows = conn.execute("""SELECT * FROM slots WHERE level_id = ? AND date >= ?
+            AND deleted_at IS NULL AND source_schedule_id IS NOT NULL""", (level_id, today)).fetchall()
+    sigs = _level_schedule_signatures(conn, level_id)
+    out = []
+    for s in rows:
+        wd = date.fromisoformat(s["date"]).weekday()
+        if (wd, s["start_time"], s["end_time"], s["role_id"]) not in sigs:
+            out.append(dict(s))
+    return out
+
+
 @app.put("/api/class-schedules/level/{level_ref}")
 async def set_level_schedule(level_ref: str, request: Request, admin=Depends(require_admin)):
     """Replace all class_schedule entries for a level.
@@ -1107,7 +1141,50 @@ async def set_level_schedule(level_ref: str, request: Request, admin=Depends(req
                     "INSERT INTO schedule_staff (schedule_id, role_id, user_id, count) VALUES (?,?,?,?)",
                     (sched_id, s["role_id"], s.get("user_id"), s.get("count", 1)))
 
-        return {"ok": True, "slots": len(slot_map)}
+        # Report any already-generated future shifts that no longer match this
+        # schedule (so the UI can offer to clear them) — but don't delete here.
+        orphans = _level_orphan_slots(conn, level_id)
+        orphan_open = sum(1 for o in orphans if o["status"] == "open")
+        return {"ok": True, "slots": len(slot_map),
+                "orphans": {"open": orphan_open,
+                            "assigned": len(orphans) - orphan_open,
+                            "total": len(orphans)}}
+
+
+@app.post("/api/class-schedules/level/{level_ref}/reconcile")
+def reconcile_level_schedule(level_ref: str, admin=Depends(require_admin)):
+    """Remove leftover future shifts for a level that no longer match its schedule.
+    Open ones are soft-deleted; assigned ones are released (the worker is notified)
+    then soft-deleted. Ad-hoc shifts are never touched."""
+    if level_ref == "duty":
+        level_id = None
+    elif level_ref.isdigit():
+        level_id = int(level_ref)
+    else:
+        raise HTTPException(400, "level_ref must be a level id or 'duty'.")
+    removed_open = removed_assigned = 0
+    affected: dict = {}  # user_id -> count, for one summary notification each
+    with db.get_db_immediate() as conn:
+        orphans = _level_orphan_slots(conn, level_id)
+        for o in orphans:
+            if o["assigned_user_id"]:
+                affected[o["assigned_user_id"]] = affected.get(o["assigned_user_id"], 0) + 1
+                removed_assigned += 1
+            else:
+                removed_open += 1
+            conn.execute(
+                "UPDATE slots SET deleted_at=?, deleted_by=?, assigned_user_id=NULL, status='open' WHERE id=?",
+                (now_iso(), admin["id"], o["id"]))
+        for uid, cnt in affected.items():
+            notify_user(conn, uid,
+                f"{cnt} of your shift{'s' if cnt > 1 else ''} "
+                f"{'were' if cnt > 1 else 'was'} cancelled because a class schedule changed.")
+        if orphans:
+            _audit(conn, admin["id"], "shifts", "schedule_reconcile",
+                   f"{len(orphans)} leftover shift{'s' if len(orphans) != 1 else ''} removed "
+                   f"({removed_assigned} assigned)")
+    return {"ok": True, "removed_open": removed_open,
+            "removed_assigned": removed_assigned, "removed": removed_open + removed_assigned}
 
 
 # ----------------------------------------------------------------------------

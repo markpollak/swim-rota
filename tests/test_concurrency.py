@@ -285,3 +285,43 @@ def test_deleted_slot_excluded_from_coverage_and_unclaimable_and_restorable():
     assert coverage_total() == before  # back in the count
     # ...and is claimable again once restored
     assert _api("POST", f"/api/slots/{slot}/request", utok)[0] == 200
+
+
+# ========================================================= schedule reconcile (S4)
+def test_schedule_edit_reconciles_orphaned_shifts_but_spares_adhoc():
+    role = _seed_base()
+    admin = _make_admin("boss5", "rightpass1"); atok = auth.make_token(admin)
+    (uid,) = _make_users(role, 1)
+    wd = date.fromisoformat(FUTURE).weekday()
+    with db.get_db() as conn:
+        lvl = conn.execute("INSERT INTO levels (name, sort_order) VALUES ('TestLvl', 1)").lastrowid
+        cs = conn.execute(
+            "INSERT INTO class_schedules (level_id, weekday, start_time, end_time) VALUES (?,?,?,?)",
+            (lvl, wd, "15:00", "15:30")).lastrowid
+        conn.execute("INSERT INTO schedule_staff (schedule_id, role_id, user_id, count) VALUES (?,?,NULL,1)", (cs, role))
+        # one open + one assigned slot generated from this schedule
+        conn.execute("INSERT INTO slots (date,start_time,end_time,level_id,role_id,status,source_schedule_id) "
+                     "VALUES (?,?,?,?,?, 'open', ?)", (FUTURE, "15:00", "15:30", lvl, role, cs))
+        conn.execute("INSERT INTO slots (date,start_time,end_time,level_id,role_id,status,assigned_user_id,source_schedule_id) "
+                     "VALUES (?,?,?,?,?, 'approved', ?, ?)", (FUTURE, "15:00", "15:30", lvl, role, uid, cs))
+        # an AD-HOC slot (no source schedule) at a different time — must NEVER be swept up
+        adhoc = conn.execute("INSERT INTO slots (date,start_time,end_time,level_id,role_id,status,source_schedule_id) "
+                             "VALUES (?,?,?,?,?, 'open', NULL)", (FUTURE, "16:00", "16:30", lvl, role)).lastrowid
+
+    # remove the class's whole schedule → set_level_schedule reports the orphans
+    st, resp = _api("PUT", f"/api/class-schedules/level/{lvl}", atok, {"sessions": []})
+    assert st == 200, resp
+    assert resp["orphans"] == {"open": 1, "assigned": 1, "total": 2}, resp["orphans"]
+
+    # reconcile removes them (releasing + notifying the assigned worker)
+    st2, rec = _api("POST", f"/api/class-schedules/level/{lvl}/reconcile", atok)
+    assert st2 == 200 and rec["removed"] == 2 and rec["removed_assigned"] == 1, rec
+
+    with db.get_db() as conn:
+        alive = conn.execute("SELECT COUNT(*) c FROM slots WHERE level_id=? AND deleted_at IS NULL "
+                             "AND source_schedule_id IS NOT NULL", (lvl,)).fetchone()["c"]
+        assert alive == 0, "scheduled orphans should be gone"
+        assert conn.execute("SELECT deleted_at FROM slots WHERE id=?", (adhoc,)).fetchone()["deleted_at"] is None, \
+            "ad-hoc slot must not be touched"
+        assert conn.execute("SELECT COUNT(*) c FROM notifications WHERE user_id=? AND message LIKE '%cancelled%'",
+                            (uid,)).fetchone()["c"] >= 1, "assigned worker should be notified"

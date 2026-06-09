@@ -93,10 +93,10 @@ def generate_from_schedules(conn, from_date: date, to_date: date) -> int:
                     now = datetime.utcnow().isoformat(timespec="seconds")
                     conn.execute("""
                         INSERT INTO slots (date,start_time,end_time,level_id,role_id,
-                            label,status,assigned_user_id,requested_at,decided_at)
-                        VALUES (?,?,?,?,?,?,'approved',?,?,?)
+                            label,status,assigned_user_id,requested_at,decided_at,source_schedule_id)
+                        VALUES (?,?,?,?,?,?,'approved',?,?,?,?)
                     """, (iso, r["start_time"], r["end_time"], r["level_id"],
-                          r["role_id"], r["level_name"], r["user_id"], now, now))
+                          r["role_id"], r["level_name"], r["user_id"], now, now, r["schedule_id"]))
                     created += 1
             else:
                 # Open slot — count all existing slots at this time/level/role
@@ -116,10 +116,10 @@ def generate_from_schedules(conn, from_date: date, to_date: date) -> int:
                 need = r["count"] - existing
                 for _ in range(max(0, need)):
                     conn.execute("""
-                        INSERT INTO slots (date,start_time,end_time,level_id,role_id,label,status)
-                        VALUES (?,?,?,?,?,?,'open')
+                        INSERT INTO slots (date,start_time,end_time,level_id,role_id,label,status,source_schedule_id)
+                        VALUES (?,?,?,?,?,?,'open',?)
                     """, (iso, r["start_time"], r["end_time"], r["level_id"],
-                          r["role_id"], r["level_name"]))
+                          r["role_id"], r["level_name"], r["schedule_id"]))
                     created += 1
         d += timedelta(days=1)
     return created

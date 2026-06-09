@@ -250,6 +250,9 @@ def init_db():
             "ALTER TABLE slots ADD COLUMN deleted_by INTEGER",
             # Index the soft-delete flag: most slot queries now filter deleted_at IS NULL.
             "CREATE INDEX IF NOT EXISTS idx_slots_deleted ON slots(deleted_at)",
+            # Link a generated slot back to the class_schedule it came from, so editing
+            # a class can precisely clean up its leftover shifts (NULL = ad-hoc/template).
+            "ALTER TABLE slots ADD COLUMN source_schedule_id INTEGER",
         ]:
             try:
                 conn.execute(stmt)

@@ -5,11 +5,12 @@ Run:  python seed.py          (only seeds if empty)
 """
 import sys
 import random
+from collections import Counter
 from datetime import date, timedelta, datetime
 
 from db import get_db, init_db, DB_PATH
 from auth import hash_password
-from scheduling import half_hour_blocks, monday_of, generate_slots
+from scheduling import half_hour_blocks, monday_of, generate_from_schedules
 
 random.seed(7)
 
@@ -118,30 +119,39 @@ def run(force=False):
                 conn.execute("INSERT INTO user_roles (user_id, role_id) VALUES (?,?)",
                              (user_id[uname], role_id[r]))
 
-        # ---- Lifeguard cover: 06:30–21:00 every day, 2 lifeguards required per slot ----
+        # All shifts are modelled as class_schedules so the in-app schedule editor is
+        # the single source of truth (and every generated slot is tagged with its
+        # source schedule, enabling precise cleanup when a class is changed/removed).
+
+        # ---- Lifeguard cover as "pool duty": 06:30–21:00 every day, 2 guards ----
         lg_blocks = list(half_hour_blocks("06:30", "21:00"))
         for wd in range(7):
             for s, e in lg_blocks:
+                cur = conn.execute(
+                    "INSERT INTO class_schedules (level_id, weekday, start_time, end_time) VALUES (NULL,?,?,?)",
+                    (wd, s, e))
                 conn.execute(
-                    """INSERT INTO templates (weekday, start_time, end_time, level_id, lane,
-                            role_id, count, label) VALUES (?,?,?,?,?,?,?,?)""",
-                    (wd, s, e, None, None, role_id["Lifeguard"], 2, "Pool Lifeguard"))
+                    "INSERT INTO schedule_staff (schedule_id, role_id, user_id, count) VALUES (?,?,NULL,2)",
+                    (cur.lastrowid, role_id["Lifeguard"]))
 
-        # ---- Teaching schedule from weekly plan (no lifeguards embedded) ----
+        # ---- Teaching classes: one class_schedule per (level × weekday × time) ----
         for wd, (start, end, levels) in WEEK_PLAN.items():
             blocks = list(half_hour_blocks(start, end))
             for b, (s, e) in enumerate(blocks):
-                for lane in range(1, LANES + 1):
-                    lvl = levels[(b + lane - 1) % len(levels)]
+                lane_levels = [levels[(b + lane - 1) % len(levels)] for lane in range(1, LANES + 1)]
+                for lvl, lanes in Counter(lane_levels).items():
+                    cur = conn.execute(
+                        "INSERT INTO class_schedules (level_id, weekday, start_time, end_time) VALUES (?,?,?,?)",
+                        (level_id[lvl], wd, s, e))
+                    sched_id = cur.lastrowid
                     for rname, cnt in STAFFING.get(lvl, DEFAULT_STAFFING):
                         conn.execute(
-                            """INSERT INTO templates (weekday, start_time, end_time, level_id,
-                                    lane, role_id, count, label) VALUES (?,?,?,?,?,?,?,?)""",
-                            (wd, s, e, level_id[lvl], lane, role_id[rname], cnt, lvl))
+                            "INSERT INTO schedule_staff (schedule_id, role_id, user_id, count) VALUES (?,?,NULL,?)",
+                            (sched_id, role_id[rname], lanes * cnt))
 
         # materialise 4 weeks of slots from this Monday
         wk_start = monday_of(today)
-        generate_slots(conn, wk_start, wk_start + timedelta(weeks=4) - timedelta(days=1))
+        generate_from_schedules(conn, wk_start, wk_start + timedelta(weeks=4) - timedelta(days=1))
 
         # --- make the demo lively: approve some, request some, leave some open ---
         qualified = {}  # role_id -> [user_id] of in-date, qualified users
@@ -261,7 +271,7 @@ def run(force=False):
 
         print(f"Seeded {DB_PATH}")
         counts = {t: conn.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]
-                  for t in ["users", "roles", "levels", "templates", "slots", "channels", "messages"]}
+                  for t in ["users", "roles", "levels", "class_schedules", "slots", "channels", "messages"]}
         print("Counts:", counts)
         print("\nLogins (all demo passwords as below):")
         print("  admin / admin123   (administrator)")
