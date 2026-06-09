@@ -297,3 +297,12 @@ Two issues with the schedule editor were reported and fixed:
 2. **Reducing a class's count didn't remove the surplus, and the editor had no easy way to change a count.** **Fix:** orphan detection is now **count-aware** — for each day/time/role it removes the excess over the desired count (choosing OPEN shifts before assigned ones, so people keep bookings) — and the editor gained **− / ＋ steppers** on every session row. Reducing a count now prompts to clear the surplus.
 
 Tests: `test_readd_deleted_class_regenerates`, `test_count_reduction_removes_open_excess_keeps_assigned` (11 total).
+
+### ✅ "Keep booked shifts" option on schedule removal
+
+When removing/reducing a class, the cleanup prompt now offers a **"Keep shifts staff are already booked on"** checkbox (ticked by default). Behaviour by status:
+- **open** (unfilled) → always removed;
+- **requested** (pending) → always removed, requester notified + DM'd;
+- **approved** (booked) → if kept, the shift is **detached** (`source_schedule_id` cleared) so it stays on the calendar as a standalone one-off (no notification, never regenerated/reconciled again); if not kept, removed + notified.
+
+Endpoint: `POST …/reconcile?keep_booked=1`. `set_level_schedule` now returns the orphan breakdown `{open, requested, approved, ...}` so the prompt can show the split and only surface the checkbox when staff are actually booked. Test: `test_reconcile_keep_booked_detaches_approved_only` (12 total).

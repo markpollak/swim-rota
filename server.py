@@ -1169,36 +1169,49 @@ async def set_level_schedule(level_ref: str, request: Request, admin=Depends(req
         # Report any already-generated future shifts that no longer match this
         # schedule (so the UI can offer to clear them) — but don't delete here.
         orphans = _level_orphan_slots(conn, level_id)
-        orphan_open = sum(1 for o in orphans if o["status"] == "open")
+        counts = {"open": 0, "requested": 0, "approved": 0}
+        for o in orphans:
+            st = o["status"] if o["status"] in counts else "open"
+            counts[st] += 1
         return {"ok": True, "slots": len(slot_map),
-                "orphans": {"open": orphan_open,
-                            "assigned": len(orphans) - orphan_open,
+                "orphans": {**counts,
+                            "assigned": counts["requested"] + counts["approved"],
                             "total": len(orphans)}}
 
 
 @app.post("/api/class-schedules/level/{level_ref}/reconcile")
-def reconcile_level_schedule(level_ref: str, admin=Depends(require_admin)):
-    """Remove leftover future shifts for a level that no longer match its schedule
-    (removed sessions or reduced counts). These are **hard-deleted** (not tombstoned)
-    so the same class/count can be re-added later and regenerate cleanly — manual
-    Delete-Shifts removals stay soft-deleted and keep suppressing regeneration.
-    Assigned shifts are released first; the worker gets a bell notification AND a
-    direct message from the admin listing the cancelled shifts. Ad-hoc shifts are
-    never touched."""
+def reconcile_level_schedule(level_ref: str, request: Request, admin=Depends(require_admin)):
+    """Remove leftover future shifts for a level that no longer match its schedule.
+
+    Removed/reduced shifts are **hard-deleted** (not tombstoned) so the class/count
+    can be re-added later and regenerate cleanly. Handled by status:
+      • open (unfilled) → removed;
+      • requested (pending) → removed, and the requester is notified + DM'd;
+      • approved (booked) → removed + notified, OR — when ``?keep_booked=1`` — *detached*
+        (its source_schedule_id is cleared) so it stays on the calendar as a standalone
+        one-off class, never regenerated or reconciled again.
+    Ad-hoc shifts are never touched."""
     if level_ref == "duty":
         level_id = None
     elif level_ref.isdigit():
         level_id = int(level_ref)
     else:
         raise HTTPException(400, "level_ref must be a level id or 'duty'.")
+    keep_booked = request.query_params.get("keep_booked") in ("1", "true", "True")
     from datetime import datetime as _dt
-    removed_open = removed_assigned = 0
+    removed_open = removed_assigned = kept = 0
     affected: dict = {}  # user_id -> [shift description strings]
     dms = []             # (channel_id, message_id, body) to fan out after commit
     with db.get_db_immediate() as conn:
         orphans = _level_orphan_slots(conn, level_id)
         for o in orphans:
-            if o["assigned_user_id"]:
+            if keep_booked and o["status"] == "approved" and o["assigned_user_id"]:
+                # Keep it: detach from the schedule so it lives on as a one-off shift
+                # (no notification — nothing changes for the person booked on).
+                conn.execute("UPDATE slots SET source_schedule_id=NULL WHERE id=?", (o["id"],))
+                kept += 1
+                continue
+            if o["assigned_user_id"]:  # approved (not kept) or requested → cancel + notify
                 try:
                     date_str = _dt.strptime(o["date"], "%Y-%m-%d").strftime("%A %-d %B")
                 except Exception:
@@ -1231,15 +1244,15 @@ def reconcile_level_schedule(level_ref: str, admin=Depends(require_admin)):
                 dms.append((dm_ch["id"], cur.lastrowid, body))
         if orphans:
             _audit(conn, admin["id"], "shifts", "schedule_reconcile",
-                   f"{len(orphans)} leftover shift{'s' if len(orphans) != 1 else ''} removed "
-                   f"({removed_assigned} assigned)")
+                   f"{removed_open + removed_assigned} removed, {kept} kept as one-offs "
+                   f"({removed_assigned} assigned cancelled)")
     # Push each DM in real time once the transaction has committed.
     for cid, mid, body in dms:
         _fanout(cid, {"id": mid, "channel_id": cid, "body": body, "sent_at": now_iso(),
                       "user_id": admin["id"], "full_name": admin["full_name"],
                       "username": admin["username"]})
-    return {"ok": True, "removed_open": removed_open,
-            "removed_assigned": removed_assigned, "removed": removed_open + removed_assigned}
+    return {"ok": True, "removed_open": removed_open, "removed_assigned": removed_assigned,
+            "kept": kept, "removed": removed_open + removed_assigned}
 
 
 # ----------------------------------------------------------------------------

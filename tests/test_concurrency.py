@@ -312,7 +312,7 @@ def test_schedule_edit_reconciles_orphaned_shifts_but_spares_adhoc():
     # remove the class's whole schedule → set_level_schedule reports the orphans
     st, resp = _api("PUT", f"/api/class-schedules/level/{lvl}", atok, {"sessions": []})
     assert st == 200, resp
-    assert resp["orphans"] == {"open": 1, "assigned": 1, "total": 2}, resp["orphans"]
+    assert resp["orphans"]["total"] == 2 and resp["orphans"]["assigned"] == 1, resp["orphans"]
 
     # reconcile removes them (releasing + notifying the assigned worker)
     st2, rec = _api("POST", f"/api/class-schedules/level/{lvl}/reconcile", atok)
@@ -386,9 +386,48 @@ def test_count_reduction_removes_open_excess_keeps_assigned():
     st, resp = _api("PUT", f"/api/class-schedules/level/{lvl}", atok,
                     {"sessions": [{"weekday": wd, "start_time": "15:00", "end_time": "15:30",
                                    "role_id": role, "user_id": None, "count": 1}]})
-    assert resp["orphans"] == {"open": 1, "assigned": 0, "total": 1}, resp["orphans"]  # one OPEN excess
+    assert resp["orphans"]["total"] == 1 and resp["orphans"]["open"] == 1 and resp["orphans"]["approved"] == 0, resp["orphans"]
     _api("POST", f"/api/class-schedules/level/{lvl}/reconcile", atok)
     with db.get_db() as conn:
         rows = conn.execute("SELECT status, assigned_user_id FROM slots WHERE level_id=? AND deleted_at IS NULL",
                             (lvl,)).fetchall()
     assert len(rows) == 1 and rows[0]["assigned_user_id"] == uid, "keep the assigned shift, drop the open one"
+
+
+# ===================================== keep-booked option on schedule reconcile
+def test_reconcile_keep_booked_detaches_approved_only():
+    role = _seed_base()
+    admin = _make_admin("boss8", "rightpass1"); atok = auth.make_token(admin)
+    u_req, u_app = _make_users(role, 2)
+    wd = date.fromisoformat(FUTURE).weekday()
+    with db.get_db() as conn:
+        lvl = conn.execute("INSERT INTO levels (name, sort_order) VALUES ('TL3', 1)").lastrowid
+        cs = conn.execute("INSERT INTO class_schedules (level_id, weekday, start_time, end_time) VALUES (?,?,?,?)",
+                          (lvl, wd, "15:00", "15:30")).lastrowid
+        conn.execute("INSERT INTO schedule_staff (schedule_id, role_id, user_id, count) VALUES (?,?,NULL,3)", (cs, role))
+
+        def ins(status, uid=None):
+            return conn.execute(
+                "INSERT INTO slots (date,start_time,end_time,level_id,role_id,status,assigned_user_id,source_schedule_id) "
+                "VALUES (?,?,?,?,?,?,?,?)", (FUTURE, "15:00", "15:30", lvl, role, status, uid, cs)).lastrowid
+        s_open = ins("open")
+        s_req = ins("requested", u_req)
+        s_app = ins("approved", u_app)
+        server.ensure_dm_channels(conn)
+
+    # remove the schedule entirely → all three become orphans
+    _api("PUT", f"/api/class-schedules/level/{lvl}", atok, {"sessions": []})
+
+    # reconcile, keeping booked (approved) shifts
+    st, rec = _api("POST", f"/api/class-schedules/level/{lvl}/reconcile?keep_booked=1", atok)
+    assert st == 200 and rec["kept"] == 1 and rec["removed"] == 2, rec  # open + requested gone, approved kept
+
+    with db.get_db() as conn:
+        # open + requested are gone
+        assert conn.execute("SELECT COUNT(*) c FROM slots WHERE id IN (?,?)", (s_open, s_req)).fetchone()["c"] == 0
+        # approved is KEPT, detached (source NULL), still assigned to the same person
+        row = conn.execute("SELECT status, assigned_user_id, source_schedule_id FROM slots WHERE id=?", (s_app,)).fetchone()
+        assert row and row["assigned_user_id"] == u_app and row["source_schedule_id"] is None, dict(row) if row else None
+        # the pending requester was notified their request was cancelled
+        assert conn.execute("SELECT COUNT(*) c FROM notifications WHERE user_id=? AND message LIKE '%cancelled%'",
+                            (u_req,)).fetchone()["c"] >= 1

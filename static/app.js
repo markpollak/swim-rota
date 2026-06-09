@@ -2216,24 +2216,42 @@ function classScheduleSheet(level, roles, existingSessions) {
 
 // After a class schedule changes, offer to clear future shifts that no longer match.
 function promptReconcileCleanup(levelRef, orph) {
-  const assignedNote = orph.assigned > 0
-    ? `<p class="small" style="color:var(--amber);margin-top:8px">⚠ ${orph.assigned} ${orph.assigned === 1 ? "is" : "are"} already assigned to staff — they'll be notified their shift was cancelled.</p>`
-    : "";
+  const open = orph.open || 0, requested = orph.requested || 0, approved = orph.approved || 0;
+  const bits = [];
+  if (open) bits.push(`${open} empty`);
+  if (requested) bits.push(`${requested} awaiting approval`);
+  if (approved) bits.push(`${approved} booked by staff`);
+  const breakdown = bits.length ? ` (${bits.join(", ")})` : "";
+  // Checkbox only matters when staff are actually booked on some of them.
+  const checkbox = approved > 0
+    ? `<label style="display:flex;align-items:flex-start;gap:8px;margin:14px 0;cursor:pointer">
+         <input type="checkbox" id="rc-keep" checked style="margin-top:3px;width:auto"/>
+         <span class="small">Keep the ${approved} shift${approved !== 1 ? "s" : ""} staff are already booked on
+           <span class="muted">— they stay on the calendar as one-off classes.</span></span>
+       </label>` : "";
+  const noteBits = [];
+  if (open) noteBits.push("empty shifts are removed");
+  if (requested) noteBits.push("anyone awaiting approval is declined and notified");
+  const note = noteBits.length
+    ? `<p class="small muted" style="margin-top:6px">${(noteBits.join("; ").charAt(0).toUpperCase() + noteBits.join("; ").slice(1))}.</p>` : "";
   const sheet = openSheet(`
     <h2 style="margin-bottom:6px">Remove leftover shifts?</h2>
-    <p class="small muted">This change left <strong>${orph.total}</strong> future shift${orph.total !== 1 ? "s" : ""} on the rota that no longer match this class.</p>
-    ${assignedNote}
-    <div style="display:flex;gap:10px;margin-top:18px">
-      <button class="btn danger" id="rc-yes">Remove ${orph.total} shift${orph.total !== 1 ? "s" : ""}</button>
-      <button class="btn ghost" id="rc-no">Keep them</button>
+    <p class="small muted">This change left <strong>${orph.total}</strong> future shift${orph.total !== 1 ? "s" : ""} that no longer match this class${breakdown}.</p>
+    ${note}
+    ${checkbox}
+    <div style="display:flex;gap:10px;margin-top:8px">
+      <button class="btn danger" id="rc-yes">Remove shifts</button>
+      <button class="btn ghost" id="rc-no">Leave them</button>
     </div>`);
   const done = () => { closeSheet(); manageClasses(); };
   sheet.querySelector("#rc-no").addEventListener("click", done);
   sheet.querySelector("#rc-yes").addEventListener("click", async (e) => {
     e.target.disabled = true; e.target.textContent = "Removing…";
+    const keep = sheet.querySelector("#rc-keep")?.checked ? 1 : 0;
     try {
-      const r = await api(`/api/class-schedules/level/${levelRef}/reconcile`, { method: "POST" });
-      toast(`Removed ${r.removed} leftover shift${r.removed !== 1 ? "s" : ""}`, "ok");
+      const r = await api(`/api/class-schedules/level/${levelRef}/reconcile?keep_booked=${keep}`, { method: "POST" });
+      const keptNote = r.kept ? `, kept ${r.kept} booked` : "";
+      toast(`Removed ${r.removed} shift${r.removed !== 1 ? "s" : ""}${keptNote}`, "ok");
     } catch (err) { toast(err.message, "err"); }
     done();
   });
