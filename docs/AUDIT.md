@@ -288,3 +288,12 @@ The earlier blocker — no way to tell a removed class's shifts from ad-hoc ones
 - Tested: `test_schedule_edit_reconciles_orphaned_shifts_but_spares_adhoc` (orphan count, removal, ad-hoc untouched, worker notified). Verified end-to-end in the UI.
 
 > *Migration note:* on an existing database, pre-existing slots have `source_schedule_id = NULL`, so reconcile won't touch them — the feature applies cleanly to freshly-generated shifts. A reseed (authorised here) gives the unified, fully-tagged model. **Known gap:** reducing a session's *count* (same weekday/time/role) isn't treated as an orphan yet — removed sessions and time changes are.
+
+### ✅ Schedule edge-cases fixed (re-add + count changes)
+
+Two issues with the schedule editor were reported and fixed:
+
+1. **Re-adding a removed class never regenerated.** Generation counts soft-deleted rows (to stop *manually* deleted shifts returning), so a class removed via reconcile left tombstones that permanently blocked it from regenerating. **Fix:** reconcile now **hard-deletes** schedule-removed shifts (manual Delete-Shifts still soft-deletes), so re-adding the class — or increasing its count — regenerates cleanly. Verified live (remove a day → 0 shifts → re-add + generate → shifts back).
+2. **Reducing a class's count didn't remove the surplus, and the editor had no easy way to change a count.** **Fix:** orphan detection is now **count-aware** — for each day/time/role it removes the excess over the desired count (choosing OPEN shifts before assigned ones, so people keep bookings) — and the editor gained **− / ＋ steppers** on every session row. Reducing a count now prompts to clear the surplus.
+
+Tests: `test_readd_deleted_class_regenerates`, `test_count_reduction_removes_open_excess_keeps_assigned` (11 total).
