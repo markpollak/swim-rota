@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building a Staff Pool Rota PWA in Six Days</title>
+<style>
+  :root{
+    --bg:#0c0f14; --panel:#141922; --panel2:#1b2230; --line:#262f3d;
+    --ink:#e7edf5; --mut:#94a3b8; --dim:#64748b;
+    --grn:#34d399; --red:#f87171; --amb:#fbbf24; --blu:#60a5fa; --vio:#a78bfa; --mag:#f472b6;
+    --mono:'SF Mono',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.7 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:860px;margin:0 auto;padding:0 22px 120px}
+  header.hero{padding:74px 22px 50px;text-align:center;
+    background:radial-gradient(1100px 460px at 50% -120px,#16264a 0%,transparent 70%);
+    border-bottom:1px solid var(--line)}
+  .kick{color:var(--blu);font-weight:700;letter-spacing:.16em;text-transform:uppercase;font-size:12.5px}
+  h1{font-size:clamp(30px,5.4vw,50px);line-height:1.08;margin:.32em auto .26em;max-width:18ch;
+     background:linear-gradient(180deg,#fff,#aebed6);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--mut);max-width:62ch;margin:0 auto;font-size:18px}
+  .meta{color:var(--dim);font-size:13.5px;margin-top:20px}
+  .meta b{color:var(--mut)}
+  h2{font-size:27px;margin:58px 0 6px;letter-spacing:-.01em}
+  h2 .n{color:var(--vio);font:600 15px/1 var(--mono);vertical-align:super;margin-right:10px}
+  h3{font-size:18.5px;margin:30px 0 4px;color:#cdd8e8}
+  p{color:#d4dce8}
+  a{color:var(--blu);text-decoration:none}a:hover{text-decoration:underline}
+  code{font-family:var(--mono);font-size:.88em;background:#0f141c;border:1px solid var(--line);
+    padding:1.5px 6px;border-radius:6px;color:#bfe1ff}
+  .lead{font-size:18.5px;color:#dfe7f1}
+  figure{margin:30px 0 8px}
+  figure img{width:100%;border-radius:14px;border:1px solid var(--line);
+    box-shadow:0 22px 60px rgba(0,0,0,.5);display:block;background:#0a0d12}
+  figcaption{color:var(--dim);font-size:13.5px;margin-top:10px;text-align:center}
+  figure.phone{max-width:340px;margin-left:auto;margin-right:auto}
+  .shots2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;max-width:740px;margin:30px auto 8px}
+  .shots2 figure{margin:0}
+  @media(max-width:560px){.shots2{grid-template-columns:1fr;max-width:340px}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin:22px 0}
+  .callout{border-left:3px solid var(--amb);background:linear-gradient(90deg,#1c1a12,transparent 80%);
+    border-radius:0 12px 12px 0;padding:14px 20px;margin:22px 0;color:#e9e2cf}
+  .callout.good{border-color:var(--grn);background:linear-gradient(90deg,#0f1b16,transparent 80%);color:#d8efe4}
+  .callout.info{border-color:var(--blu);background:linear-gradient(90deg,#101a26,transparent 80%);color:#dbe9f7}
+  .callout.bad{border-color:var(--red);background:linear-gradient(90deg,#221114,transparent 80%);color:#f3d9da}
+  ul{padding-left:20px}li{margin:7px 0;color:#d4dce8}
+  .pill{display:inline-block;font:600 12px/1 var(--mono);padding:5px 9px;border-radius:999px;
+    border:1px solid var(--line);background:#0f141c;color:var(--mut);margin:2px 4px 2px 0}
+  table.calc{width:100%;border-collapse:collapse;margin:18px 0;font-size:14.5px}
+  table.calc th,table.calc td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  table.calc th{color:var(--mut);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.05em}
+  .pos{color:var(--grn)}.neg{color:var(--red)}
+  .flow{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;margin:18px 0}
+  .flow .step{flex:1 1 150px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px}
+  .flow .step .t{font:700 12px/1 var(--mono);color:var(--vio);letter-spacing:.05em}
+  .flow .step .d{color:var(--mut);font-size:13px;margin-top:6px}
+  .statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:26px 0}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px;text-align:center}
+  .stat .big{font:800 27px/1.1 var(--mono)}
+  .stat .lbl{color:var(--dim);font-size:12px;margin-top:7px;text-transform:uppercase;letter-spacing:.05em}
+  .b-blu{color:var(--blu)}.b-grn{color:var(--grn)}.b-amb{color:var(--amb)}.b-vio{color:var(--vio)}.b-mag{color:var(--mag)}.b-red{color:var(--red)}
+  hr{border:0;border-top:1px solid var(--line);margin:50px 0}
+  .toc{font-size:14px;color:var(--mut)}
+  .toc a{color:var(--mut)}.toc a:hover{color:var(--ink)}
+  .foot{color:var(--dim);font-size:13.5px;text-align:center;margin-top:60px}
+  blockquote{margin:18px 0;padding:2px 18px;border-left:3px solid var(--line);color:var(--mut);font-style:italic}
+  .day{display:flex;gap:16px;margin:18px 0;align-items:flex-start}
+  .day .d-tag{flex:0 0 86px;font:700 13px/1.5 var(--mono);color:var(--blu);background:#101a26;
+    border:1px solid var(--line);border-radius:10px;padding:8px 10px;text-align:center}
+  .day .d-body{flex:1;color:#d4dce8;font-size:15px}
+  .day .d-body b{color:var(--ink)}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="kick">🏊 Build Log</div>
+  <h1>Building a Staff Pool Rota PWA in Six Days</h1>
+  <p class="sub">How a FastAPI + SQLite + vanilla-JavaScript progressive web app replaced a
+  leisure-centre swimming pool's paper rota and group-chat chaos with tap-to-book shifts —
+  and got audited five times along the way.</p>
+  <div class="meta">A from-scratch project · <b>75 commits</b> over <b>6 days</b> ·
+  <b>3 runtime dependencies</b> · <b>0 build steps</b> · live in production for real staff</div>
+</header>
+
+<div class="wrap">
+
+<p class="lead">This is the story of a small, deliberately boring piece of software that does one
+job extremely well: it lets swim teachers and lifeguards put themselves on the poolside rota from
+their phones, and lets the manager approve, fill, report on and reshape that rota without a single
+spreadsheet. Here's the whole thing — the problem, the design, every feature, the genuinely hard
+parts (there were three), the five security audits, and the day-by-day build history.</p>
+
+<div class="card toc">
+  <b style="color:var(--ink)">On this page</b><br>
+  <a href="#problem">1 · The problem</a> &nbsp;·&nbsp;
+  <a href="#shape">2 · The system at a glance</a> &nbsp;·&nbsp;
+  <a href="#stack">3 · The deliberately boring stack</a> &nbsp;·&nbsp;
+  <a href="#staff">4 · The staff experience</a> &nbsp;·&nbsp;
+  <a href="#admin">5 · The admin cockpit</a> &nbsp;·&nbsp;
+  <a href="#messages">6 · Messaging</a> &nbsp;·&nbsp;
+  <a href="#hard">7 · The three hard problems</a> &nbsp;·&nbsp;
+  <a href="#audits">8 · Five audits in a week</a> &nbsp;·&nbsp;
+  <a href="#history">9 · The build, day by day</a> &nbsp;·&nbsp;
+  <a href="#prod">10 · Running it for real</a> &nbsp;·&nbsp;
+  <a href="#next">11 · What's next</a>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem: who's on poolside at 6:30?</h2>
+
+<p>A busy public swimming pool runs on half-hour blocks. Every block needs a <b>lifeguard</b> on
+poolside, full stop — that's a legal-grade requirement, not a nice-to-have. Layered on top, the
+swim school runs classes all evening: <b>Parents &amp; Toddlers</b> needs a teacher <em>and</em> an
+assistant, <b>Levels 1–10</b> each need a teacher, and different evenings run different
+combinations. Staff are part-time, many hold more than one qualification, and lifeguard training
+certificates <b>expire</b>.</p>
+
+<p>Before this app, that reality was managed the way it is at thousands of pools: a printed grid
+in the staff room, a group chat full of "can anyone take Tuesday 6pm?", and one coordinator holding
+the whole thing in their head. The failure modes write themselves — double-booked staff, empty
+lifeguard slots discovered on the day, an expired certificate nobody noticed, and zero records of
+who agreed to what.</p>
+
+<div class="callout">
+  <b>The design goal in one sentence:</b> staff <em>pull</em> the shifts they want from their
+  phones, an admin keeps one-tap control over everything, and the system itself refuses to create
+  the dangerous states — double-bookings, unqualified cover, phantom shifts.
+</div>
+
+<h2 id="shape"><span class="n">2</span>The system at a glance</h2>
+
+<p>Everything revolves around one idea: the weekly class timetable is <b>data</b>, and the rota is
+<b>generated from it</b>. An admin describes the schedule once — "Level 5 runs Monday and Wednesday
+at 17:00, one teacher" — and the system materialises every individual, bookable
+<em>person-shift</em> 26 weeks into the future, rolling the horizon forward daily. A lifeguard
+shift is generated for every half-hour the pool is open, automatically.</p>
+
+<div class="flow">
+  <div class="step"><div class="t">DESCRIBE</div><div class="d">Admin sets the weekly class schedule + staffing rules per class (e.g. P&amp;T = teacher + assistant)</div></div>
+  <div class="step"><div class="t">GENERATE</div><div class="d">The engine materialises one bookable slot per person-shift, 26 weeks ahead, idempotently</div></div>
+  <div class="step"><div class="t">REQUEST</div><div class="d">Staff tap an open slot on their phone — qualification &amp; clash checks run server-side</div></div>
+  <div class="step"><div class="t">APPROVE</div><div class="d">Admin approves/declines (with reasons), or bulk-assigns directly in the rota builder</div></div>
+  <div class="step"><div class="t">POOLSIDE</div><div class="d">Everyone sees the same live rota; gaps surface in coverage reports before they bite</div></div>
+</div>
+
+<p>The numbers, as of today:</p>
+
+<div class="statgrid">
+  <div class="stat"><div class="big b-blu">6 days</div><div class="lbl">idea → production</div></div>
+  <div class="stat"><div class="big b-vio">75</div><div class="lbl">commits (40 feat · 22 fix)</div></div>
+  <div class="stat"><div class="big b-amb">54</div><div class="lbl">commits on the busiest day</div></div>
+  <div class="stat"><div class="big b-grn">~6,900</div><div class="lbl">lines of code, total</div></div>
+</div>
+<div class="statgrid">
+  <div class="stat"><div class="big b-mag">3</div><div class="lbl">runtime dependencies</div></div>
+  <div class="stat"><div class="big b-blu">55</div><div class="lbl">JSON API endpoints</div></div>
+  <div class="stat"><div class="big b-vio">16</div><div class="lbl">database tables</div></div>
+  <div class="stat"><div class="big b-grn">16</div><div class="lbl">automated tests</div></div>
+</div>
+<div class="statgrid">
+  <div class="stat"><div class="big b-amb">5</div><div class="lbl">full audit passes</div></div>
+  <div class="stat"><div class="big b-red">38</div><div class="lbl">findings raised &amp; closed</div></div>
+  <div class="stat"><div class="big b-blu">62</div><div class="lbl">front-end releases shipped</div></div>
+  <div class="stat"><div class="big b-grn">$6/mo</div><div class="lbl">total hosting cost</div></div>
+</div>
+
+<h2 id="stack"><span class="n">3</span>The deliberately boring stack</h2>
+
+<p>The entire backend is <b>FastAPI + SQLite</b> — about 2,600 lines of Python across five files,
+with passwords hashed and tokens signed using <em>only the standard library</em> (PBKDF2 at 120k
+iterations; compact HMAC bearer tokens). The frontend is a <b>single vanilla-JavaScript file</b>
+(~3,100 lines), one stylesheet, and a 48-line service worker. There is no React, no bundler, no
+node_modules, no build step of any kind. The full dependency list is:</p>
+
+<div style="text-align:center;margin:14px 0">
+  <span class="pill">fastapi — the API</span>
+  <span class="pill">uvicorn — the server</span>
+  <span class="pill">tzdata — so "today" means today in the UK</span>
+</div>
+
+<div class="callout info">
+  <b>Why boring wins here.</b> This is a tool one person maintains for one site. Every framework
+  you don't use is a class of upgrade treadmill, build failure and dependency CVE you never have.
+  The whole system can be read end-to-end in an afternoon — which is precisely what made it
+  possible to audit it five times in a week and actually fix what was found.
+</div>
+
+<p>And it's a real <b>PWA</b>: installable to the home screen with its own icon, app-shell cached
+for instant loads and offline resilience, while API calls always hit the network so rota data is
+never stale. Staff "install the app" the way they expect to — no app store, no review queue, and
+shipping an update is bumping one cache-version string.</p>
+
+<h2 id="staff"><span class="n">4</span>The staff experience — three taps to a shift</h2>
+
+<p>Staff log in and land on a personal dashboard: a compact 7-day grid of <em>their</em> week
+(green = approved, amber = pending, 🛟 = lifeguard duty, <code>L5</code>-style codes for classes),
+a count of what's open to grab, and — if their lifeguard training is close to expiry — a banner
+they can't miss.</p>
+
+<div class="shots2">
+  <figure>
+    <img src="img/r5-01-login.png" alt="Login screen">
+    <figcaption>Clean login. Demo credentials are hidden unless a server flag enables them.</figcaption>
+  </figure>
+  <figure>
+    <img src="img/r5-02-home-staff.png" alt="Staff home dashboard with week grid and training banner">
+    <figcaption>Home: your week at a glance, a training-expiry warning, and live open-shift counts.</figcaption>
+  </figure>
+</div>
+
+<p>The <b>Shifts</b> tab is the heart of it. The week timetable shows every half-hour block with a
+coverage pill (<code>2/2</code> covered, part-cover in amber, open in white), filterable by role
+and by class. Your own shifts get a solid outline; your pending requests a dashed red one. Tap any
+open slot and you've requested it — the server checks you're qualified for the role and not
+already booked at that time <em>before</em> it says yes. A day view presents the same data as a
+tappable card list.</p>
+
+<div class="shots2">
+  <figure>
+    <img src="img/r5-03-shifts-week.png" alt="Week timetable with role and class filters and coverage legend">
+    <figcaption>The week timetable: role/class filter chips, coverage states, "your shift" and
+    "requested" outlines.</figcaption>
+  </figure>
+  <figure>
+    <img src="img/r5-04-shifts-day.png" alt="Day view of shifts">
+    <figcaption>Day view: the same slots, grouped by time, two-column cards.</figcaption>
+  </figure>
+</div>
+
+<p>The profile tab closes the loop on compliance: staff record their own lifeguard-training expiry
+date, see their qualified roles, and change their password (with a forced-change flow if an admin
+account is still on a default password). Release a shift you can no longer make and the admins are
+notified instantly; if an <em>admin</em> removes one of yours, you get a direct message with the
+reason.</p>
+
+<figure class="phone">
+  <img src="img/r5-07-profile.png" alt="Profile view with roles and training expiry">
+  <figcaption>Profile: contact details, qualified roles, training expiry — the data the
+  enforcement rules run on.</figcaption>
+</figure>
+
+<h2 id="admin"><span class="n">5</span>The admin cockpit</h2>
+
+<p>Admins get everything staff get, plus four tabs: <b>Approvals · Reports · Manage · Rota</b>.
+Their home page leads with the thing that needs attention — the approvals backlog.</p>
+
+<div class="shots2">
+  <figure>
+    <img src="img/r5-08-admin-home.png" alt="Admin home with requests-awaiting-approval banner">
+    <figcaption>Admin home: the "requests awaiting approval" banner takes you straight to the queue.</figcaption>
+  </figure>
+  <figure>
+    <img src="img/r5-09-approvals.png" alt="Approvals queue with person, role and class filters">
+    <figcaption>Approvals: filter by person/role/class, one-tap ✓/✗, "Approve all" for the brave.</figcaption>
+  </figure>
+</div>
+
+<p>Three details in the approvals queue earn their keep. First, <b>clash detection</b>: if someone
+requested a slot that now conflicts with a shift they've since been approved for, the row shows
+the clash inline and the approve button is disabled — the bad state is unrepresentable. Second,
+declines carry an optional <b>reason</b>, which is delivered to the person as a direct message.
+Third, the queue shows <em>who else</em> has requested a contested slot, so the admin is choosing,
+not guessing.</p>
+
+<h3>The rota builder</h3>
+
+<p>For the manager who'd rather place people than wait for requests, the <b>Rota</b> tab is a
+spreadsheet-killer: pick a person, tick any number of cells across the week — across roles, with
+an "All roles" view that badges each cell by role colour — and bulk-assign in one shot. Anything
+that can't be assigned comes back as a <b>detailed skip report</b> (already taken, not qualified,
+clashes with their other shift — with times), rather than a silent partial success. Tap an
+assigned cell to remove the person (they're DM'd the reason). A <b>Delete Shifts</b> mode
+soft-deletes open slots with a "Recently deleted" restore view, a <b>Wide</b> mode shows full
+names for big screens, and <b>Print</b> produces the PDF for the staff-room door.</p>
+
+<figure>
+  <img src="img/r5-12-rota-builder.png" alt="Desktop rota builder with role chips, assign-to picker and week grid">
+  <figcaption>The rota builder on a desktop: role/class chips, assign-to picker, colour-badged
+  cells (solid = approved, dashed = pending), Wide and Print modes.</figcaption>
+</figure>
+
+<h3>The schedule editor — where the rota comes from</h3>
+
+<p>Manage → Classes is the single source of truth the whole system generates from. Each class
+lists its weekly sessions with <b>− / ＋ steppers</b> for how many run at each time. Change the
+schedule and the system reconciles reality for you: it counts the already-generated future shifts
+that no longer match, tells you how many are booked by real people, and offers the humane option —
+<em>"Keep shifts staff are already booked on"</em> — which detaches those bookings as standalone
+one-offs while clearing the rest, notifying everyone affected, automatically.</p>
+
+<figure>
+  <img src="img/r5-13-classes.png" alt="Class schedule editor listing classes with session counts and staffing">
+  <figcaption>The schedule editor: every class, its staffing rule and weekly sessions. Edits
+  prompt a cleanup of orphaned future shifts — with bookings protected by default.</figcaption>
+</figure>
+
+<h3>Reports that answer the actual questions</h3>
+
+<p><b>Outstanding</b> lists every unfilled shift for the next month, with CSV export.
+<b>Coverage</b> turns each day into a single bar and percentage — the manager's five-second
+health check. <b>Training</b> is the compliance view: every lifeguard, their expiry date, sorted
+so <span class="neg">expired</span> and <span class="b-amb">expiring</span> float to the top. And
+the <b>Activity</b> log records every action in the system — who approved what, who deleted what,
+when — filterable by category.</p>
+
+<div class="shots2">
+  <figure>
+    <img src="img/r5-10-reports-coverage.png" alt="Coverage report with per-day percentage bars">
+    <figcaption>Coverage: one bar per day, filled/total, expandable to the missing slots.</figcaption>
+  </figure>
+  <figure>
+    <img src="img/r5-11-reports-training.png" alt="Training status report">
+    <figcaption>Training: valid / expiring / expired / missing, at a glance.</figcaption>
+  </figure>
+</div>
+
+<h2 id="messages"><span class="n">6</span>Messaging — because the group chat was the real rota</h2>
+
+<p>Rather than pretend staff won't coordinate by chat, the app brings the chat inside: an
+<b>All Staff</b> system channel everyone belongs to, <b>role-linked channels</b> (add someone to
+the Lifeguard role and they're in the Lifeguards channel automatically), and a private
+<b>"Message Admins"</b> line for every staff member. Delivery is real-time over server-sent
+events, with unread badges on the tab bar; declined requests, removed shifts and schedule
+cancellations all arrive here with their reasons, so the audit trail and the conversation are the
+same thing. Deleted channels are archived with their full history, not erased.</p>
+
+<div class="shots2">
+  <figure>
+    <img src="img/r5-05-messages.png" alt="Channel list with unread badges">
+    <figcaption>Channels, DMs and unread counts.</figcaption>
+  </figure>
+  <figure>
+    <img src="img/r5-06-chat.png" alt="All Staff channel conversation">
+    <figcaption>Real-time chat — and the delivery channel for every automated notice.</figcaption>
+  </figure>
+</div>
+
+<h2 id="hard"><span class="n">7</span>The three genuinely hard problems</h2>
+
+<h3>1 · Two thumbs, one shift</h3>
+
+<p>The app's core promise is <em>who holds which shift</em> — and the moment it's most useful
+(the rota opens, everyone grabs at once) is exactly when naive code corrupts it. The original
+booking path did what almost every CRUD app does: <code>SELECT</code> the slot, check it's open,
+then <code>UPDATE</code> it. Two people tapping the same slot in the same instant both pass the
+check, both write, and <b>both get told "it's yours"</b> — but only the last write wins. The
+loser finds out at the poolside.</p>
+
+<div class="callout good">
+  <b>The fix is two disciplines, applied everywhere.</b> Every check-then-write runs inside
+  SQLite's <code>BEGIN IMMEDIATE</code> (take the write lock <em>before</em> reading), and every
+  state change is a <em>conditional</em> update — <code>UPDATE … WHERE id=? AND
+  status='open'</code> — whose row-count is checked. Lose the race and you get an honest
+  <em>"That shift was just taken by someone else"</em>, never a false success. The same pattern
+  guards request, approve, assign, bulk-assign, delete, restore, release and reject.
+</div>
+
+<p>Crucially, this isn't trusted on faith: the test suite spins up a real server and fires
+<b>genuinely parallel requests</b> released by a thread barrier — six users hitting one slot must
+produce exactly one success, and one user double-tapping two overlapping slots must end up holding
+exactly one.</p>
+
+<h3>2 · Schedules change; the future already exists</h3>
+
+<p>Because shifts are materialised 26 weeks ahead, every schedule edit is a tiny migration
+problem: cancel Wednesday's Level 3 class and there are six months of already-generated — possibly
+already <em>booked</em> — Level 3 shifts stranded on the calendar. The solution that survived
+contact with reality: every generated shift carries a <code>source_schedule_id</code> tag linking
+it to the schedule line that created it. Edits compute the precise orphan set (count-aware, so
+reducing "two teachers" to "one" removes only the surplus, preferring unbooked shifts), ad-hoc
+one-off shifts are never touched, affected staff are notified and DM'd, and booked shifts can be
+kept as detached one-offs. Removed shifts are hard-deleted so re-adding the class later
+regenerates cleanly.</p>
+
+<h3>3 · The cache that ate Tuesday</h3>
+
+<p>PWAs cache aggressively — that's the point — but it means a careless deploy strands users on
+last week's JavaScript. The discipline that emerged after one too many "but it works on my
+machine": static files are <b>unversioned</b>, and a single cache-name constant in the service
+worker is the only source of truth. Bump <code>staff-pool-v61</code> → <code>v62</code> and the
+activate handler clears the old shell everywhere. Sixty-two bumps so far — the number is an
+honest, monotonic count of every front-end release.</p>
+
+<h2 id="audits"><span class="n">8</span>Five audits in a week</h2>
+
+<p>The app was audited end-to-end five times during the build — each pass a full fresh read of the
+code, each finding fixed (or explicitly accepted) before moving on. The trajectory tells the
+story:</p>
+
+<table class="calc">
+  <thead><tr><th>Pass</th><th>Headline findings</th><th>Outcome</th></tr></thead>
+  <tbody>
+    <tr><td><b>1–2</b></td><td>The two booking races above; no login rate-limiting; default admin
+      credentials shipped; timezone drift; bad input → 500s; <b>zero tests</b></td>
+      <td class="pos">All fixed; first 7 tests added</td></tr>
+    <tr><td><b>3</b></td><td>Soft-deleted shifts still counted in coverage and could still be
+      claimed; schedule edits orphaning future shifts; proxy real-IP and origin-exposure issues on
+      the production deployment</td>
+      <td class="pos">All fixed; restore view added</td></tr>
+    <tr><td><b>4</b></td><td>Deactivating a staff member left their future shifts as phantom
+      cover; horizon roll-forward could stall; five smaller validation gaps</td>
+      <td class="pos">All fixed; 13 tests green</td></tr>
+    <tr><td><b>5</b></td><td>A stored-XSS sliver (one unescaped tooltip attribute in the rota
+      builder — the <em>only</em> unescaped sink among 74 templated views); the last two unguarded
+      admin races (reject/decline); a channel-membership disclosure; retired roles still
+      generating shifts; six smaller items</td>
+      <td class="pos">All fixed; 16 tests green</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <b>The XSS one is worth a beat.</b> The frontend escapes user data through one
+  <code>esc()</code> helper — 134 call sites, all clean — except a single <code>title</code>
+  tooltip attribute in the rota grid that interpolated staff names raw. Since staff can edit
+  their own display name, a name containing a quote character could break out of the attribute
+  and run script in an <em>admin's</em> browser. One line to fix; the lesson is older than the
+  web: escaping is only as strong as its least-templated attribute.
+</div>
+
+<p>What five passes buys, concretely: the first audit found <em>"two people can both be told they
+own the same shift"</em>; the fifth found <em>"a tooltip doesn't escape quotes."</em> That
+gradient — from integrity-breaking to edge-case — is what <b>done</b> looks like, and the 16-test
+suite pins the important ones down so they can't quietly come back.</p>
+
+<h2 id="history"><span class="n">9</span>The build, day by day</h2>
+
+<div class="day"><div class="d-tag">Day 1<br>Jun 4</div><div class="d-body">
+  <b>The whole skeleton in one commit.</b> FastAPI + SQLite backend with stdlib auth, the slot
+  model, weekly templates, demo seed data, and a working vanilla-JS PWA — login, calendar,
+  request/approve flow, manifest, service worker, icons.
+</div></div>
+<div class="day"><div class="d-tag">Day 2<br>Jun 5</div><div class="d-body">
+  <b>Rethink + messaging.</b> Dropped per-lane modelling for a cleaner class-schedule system;
+  redesigned the home cards; added the full messaging layer — channels, DMs, unread badges — and
+  an auto-deploy cron.
+</div></div>
+<div class="day"><div class="d-tag">Day 3<br>Jun 6</div><div class="d-body">
+  <b>Polish weekend.</b> The compact "my week" grid that became the home page's signature, plus
+  message-badge fixes.
+</div></div>
+<div class="day"><div class="d-tag">Day 5<br>Jun 8</div><div class="d-body">
+  <b>The monster day — 54 commits.</b> Admin interface overhaul (compact approvals, reports, day
+  view); the rota builder with role shortcodes, the All-roles view and bulk-assign skip reports;
+  inline clash warnings; the 🛟 lifeguard treatment; calendar filters and legends; the activity
+  log; configurable timezone; the All-Staff system channel; deleted-channel archive and
+  deactivated-staff audit trail; <b>audits 1–2 and the concurrency fixes</b>; production hardening
+  (rate-limiting, forced password change, security headers); the rebrand to a generic <b>Staff
+  Pool Rota</b>; and the <b>production launch</b> behind Cloudflare.
+</div></div>
+<div class="day"><div class="d-tag">Day 6<br>Jun 9</div><div class="d-body">
+  <b>Living-schedule day.</b> Widescreen/print rota and per-user short names; Delete-Shifts mode
+  with soft-delete and restore; the schedule editor with steppers; orphan reconciliation with
+  "keep booked shifts"; <b>audits 3–4</b>; origin-firewall runbook. 13 tests green.
+</div></div>
+<div class="day"><div class="d-tag">Day 7<br>Jun 10</div><div class="d-body">
+  <b>Audit 5 (this post).</b> Fresh full re-read: tooltip XSS fixed, the last two admin races
+  guarded, channel-membership visibility tightened, retired roles stop generating, CSV-injection
+  and validation hardening. 16 tests green.
+</div></div>
+
+<h2 id="prod"><span class="n">10</span>Running it for real</h2>
+
+<p>Production is one Docker container behind <b>Caddy</b> on a <b>$6/month droplet</b>, fronted by
+Cloudflare on Full (strict) TLS with an origin certificate. Caddy adds the security-header set
+(HSTS, CSP, nosniff, frame-deny); login rate-limiting reads the real client IP through
+Cloudflare; the SQLite database is one file to back up. Deploys are a single SSH one-liner —
+<code>git pull && docker compose build && up -d</code> — and the seeded demo data, forced
+password-change flow and hidden demo credentials mean a fresh install is safe by default. The app
+deliberately runs a <b>single worker</b> (the real-time fan-out and rate-limit state are
+in-process); for one pool that's a fraction of the budget, and the multi-pool path — Postgres plus
+a shared broker — is documented but intentionally unbuilt.</p>
+
+<h2 id="next"><span class="n">11</span>What's next</h2>
+
+<ul>
+  <li><b>Push reminders</b> — "you're on poolside in 2 hours", and "your training expires in 30
+  days" before it becomes a staffing problem.</li>
+  <li><b>Shift swaps</b> — staff-to-staff handover requests with admin sign-off, instead of
+  release-and-hope.</li>
+  <li><b>Class registers</b> — the schedule already knows every class; attendance is one small
+  table away.</li>
+  <li><b>Role-removal reconciliation</b> — deactivating a person already frees their future
+  shifts; removing a single role should re-validate the shifts they hold for it the same way.</li>
+</ul>
+
+<hr>
+
+<p class="foot">
+  Built with FastAPI · SQLite · vanilla JavaScript · Caddy · Docker — and a healthy fear of
+  unguarded check-then-writes.<br>
+  Screenshots are from the live app with demo data. The full audit reports live alongside this
+  post in the repository.
+</p>
+
+</div>
+</body>
+</html>

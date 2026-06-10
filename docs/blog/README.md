@@ -2,7 +2,7 @@
 
 Versions of the article about building the app with Claude Code, plus the screenshots.
 
-> **Most up to date:** [`arc-swim-rota-post.html`](arc-swim-rota-post.html) is the **current** post — refreshed for the “Staff Pool Rota” rebrand, the Delete-Shifts feature and the Cloudflare launch, with re-captured new-brand screenshots. The Markdown and Gutenberg versions still carry the earlier (pre-rebrand) narrative and can be refreshed on request.
+> **Most up to date:** [`staff-pool-rota-deep-dive.html`](staff-pool-rota-deep-dive.html) is the **current** post — the full dark-theme deep dive (10 Jun 2026): complete feature tour, stats, the five-audit story and the day-by-day build history, with fresh `img/r5-*.png` screenshots. It contains no site-specific branding. The companion audit is [`../AUDIT-2026-06-10.md`](../AUDIT-2026-06-10.md). The older `arc-swim-rota-post.html` (and the Markdown/Gutenberg versions) carry the earlier narrative.
 
 | File | What it is | How to use it |
 |------|------------|---------------|
