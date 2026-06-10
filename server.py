@@ -115,7 +115,7 @@ def _startup():
     db.init_db()
     _load_tz()
     with db.get_db() as conn:
-        extend_to_horizon(conn)
+        extend_to_horizon(conn, today=today_local())
         ensure_dm_channels(conn)
         ensure_system_channels(conn)
         _flag_default_password_admins(conn)
@@ -136,7 +136,7 @@ async def _startup_periodic():
 
 def _extend_horizon_job():
     with db.get_db() as conn:
-        extend_to_horizon(conn)
+        extend_to_horizon(conn, today=today_local())
 
 
 def _flag_default_password_admins(conn):
@@ -300,9 +300,15 @@ def get_settings(admin=Depends(require_admin)):
         return {r["key"]: r["value"] for r in rows}
 
 
+KNOWN_SETTINGS = {"timezone", "demo_logins"}
+
+
 @app.patch("/api/settings")
 async def update_settings(request: Request, admin=Depends(require_admin)):
     b = await request.json()
+    unknown = set(b) - KNOWN_SETTINGS
+    if unknown:
+        raise HTTPException(400, f"Unknown setting(s): {', '.join(sorted(unknown))}")
     if "timezone" in b:  # validate before storing so we never adopt a bad zone
         try:
             ZoneInfo(str(b["timezone"]))
@@ -455,7 +461,7 @@ async def release_slot(slot_id: int, request: Request, user=Depends(current_user
     body = await request.json() if await _has_body(request) else {}
     reason = (body.get("reason") or "").strip()
     dm_cid = dm_mid = dm_msg = None
-    with db.get_db() as conn:
+    with db.get_db_immediate() as conn:
         s = conn.execute(
             """SELECT s.*, l.name level_name, r.name role_name
                FROM slots s LEFT JOIN levels l ON l.id=s.level_id
@@ -468,8 +474,15 @@ async def release_slot(slot_id: int, request: Request, user=Depends(current_user
         if s["date"] < today_iso():
             raise HTTPException(409, "You cannot release a past shift.")
         uid = s["assigned_user_id"]
-        conn.execute("""UPDATE slots SET assigned_user_id=NULL, status='open',
-                        requested_at=NULL, decided_at=NULL, decided_by=NULL WHERE id=?""", (slot_id,))
+        # Conditional on the holder not having changed since we read the row, so a
+        # release racing a re-assign/claim can't wipe the new holder.
+        cur = conn.execute(
+            """UPDATE slots SET assigned_user_id=NULL, status='open',
+               requested_at=NULL, decided_at=NULL, decided_by=NULL
+               WHERE id=? AND assigned_user_id IS ? AND deleted_at IS NULL""",
+            (slot_id, uid))
+        if cur.rowcount == 0:
+            raise HTTPException(409, "That shift changed before it could be released.")
         _audit(conn, user["id"], "shifts", "shift_release", _slot_desc(dict(s)))
         # If an admin removed someone else's shift, DM the worker
         if user["is_admin"] and uid and uid != user["id"]:
@@ -532,13 +545,20 @@ async def reject_slot(slot_id: int, request: Request, admin=Depends(require_admi
     dm_cid = None
     dm_mid = None
     dm_msg = None
-    with db.get_db() as conn:
+    with db.get_db_immediate() as conn:
         s = _get_slot(conn, slot_id)
         if s["status"] != "requested":
             raise HTTPException(409, "Nothing to reject on that shift.")
         uid = s["assigned_user_id"]
-        conn.execute("""UPDATE slots SET assigned_user_id=NULL, status='open',
-                        requested_at=NULL WHERE id=?""", (slot_id,))
+        # Conditional on still being the same pending request — a reject racing an
+        # approve (two admins on the same queue) must not silently un-approve it.
+        cur = conn.execute(
+            """UPDATE slots SET assigned_user_id=NULL, status='open',
+               requested_at=NULL WHERE id=? AND status='requested'
+               AND assigned_user_id IS ? AND deleted_at IS NULL""",
+            (slot_id, uid))
+        if cur.rowcount == 0:
+            raise HTTPException(409, "That request changed before it could be declined.")
         dm_msg = f"❌ Your shift request for {s['label'] or 'a shift'} on {s['date']} at {s['start_time']} was declined."
         if reason:
             dm_msg += f"\n\nReason: {reason}"
@@ -808,6 +828,8 @@ async def create_user(request: Request, admin=Depends(require_admin)):
     if not uname or not b.get("full_name"):
         raise HTTPException(400, "username and full_name required")
     pw = b.get("password") or "password"
+    if b.get("training_expiry") and not _valid_date(b["training_expiry"]):
+        raise HTTPException(400, "training_expiry must be YYYY-MM-DD.")
     with db.get_db() as conn:
         if conn.execute("SELECT 1 FROM users WHERE lower(username)=?", (uname,)).fetchone():
             raise HTTPException(409, "That username is already taken.")
@@ -831,6 +853,8 @@ async def create_user(request: Request, admin=Depends(require_admin)):
 @app.patch("/api/users/{user_id}")
 async def update_user(user_id: int, request: Request, admin=Depends(require_admin)):
     b = await request.json()
+    if b.get("training_expiry") and not _valid_date(b["training_expiry"]):
+        raise HTTPException(400, "training_expiry must be YYYY-MM-DD.")
     with db.get_db() as conn:
         if not conn.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone():
             raise HTTPException(404, "User not found")
@@ -898,6 +922,8 @@ def get_me(user=Depends(current_user)):
 @app.patch("/api/me")
 async def update_me(request: Request, user=Depends(current_user)):
     b = await request.json()
+    if b.get("training_expiry") and not _valid_date(b["training_expiry"]):
+        raise HTTPException(400, "training_expiry must be YYYY-MM-DD.")
     with db.get_db() as conn:
         fields, params = [], []
         for col in ["full_name", "email", "phone", "training_expiry"]:
@@ -1052,7 +1078,11 @@ def delete_template(tid: int, admin=Depends(require_admin)):
 @app.post("/api/generate")
 async def generate(request: Request, admin=Depends(require_admin)):
     b = await request.json() if await _has_body(request) else {}
-    weeks = int(b.get("weeks", 26))
+    try:
+        weeks = int(b.get("weeks", 26))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "weeks must be a number.")
+    weeks = max(1, min(weeks, 52))  # bound the work a single call can create
     start = monday_of(today_local())
     end = start + timedelta(weeks=weeks) - timedelta(days=1)
     with db.get_db() as conn:
@@ -1284,6 +1314,12 @@ def reconcile_level_schedule(level_ref: str, request: Request, admin=Depends(req
 # ----------------------------------------------------------------------------
 # reports
 # ----------------------------------------------------------------------------
+def _csv_safe(value: str) -> str:
+    """Spreadsheets execute cells starting with = + - @ as formulas; neutralise them."""
+    v = str(value)
+    return "'" + v if v[:1] in ("=", "+", "-", "@") else v
+
+
 def _outstanding_rows(conn, frm, to):
     return conn.execute(f"""{SLOT_SELECT}
         AND s.status != 'approved' AND s.date >= ? AND s.date <= ?
@@ -1311,8 +1347,9 @@ def report_outstanding_csv(request: Request, admin=Depends(require_admin)):
     w = csv.writer(buf)
     w.writerow(["Date", "Start", "End", "Class", "Role", "Status", "Requested by"])
     for r in rows:
-        w.writerow([r["date"], r["start_time"], r["end_time"], r["level_name"] or "Pool duty",
-                    r["role_name"], r["status"], r["assigned_name"] or ""])
+        w.writerow([r["date"], r["start_time"], r["end_time"],
+                    _csv_safe(r["level_name"] or "Pool duty"),
+                    _csv_safe(r["role_name"]), r["status"], _csv_safe(r["assigned_name"] or "")])
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f"attachment; filename=outstanding_{frm}_to_{to}.csv"})
 
@@ -1634,6 +1671,13 @@ def delete_channel(cid: int, admin=Depends(require_admin)):
 @app.get("/api/channels/{cid}/members")
 def channel_members(cid: int, user=Depends(current_user)):
     with db.get_db() as conn:
+        # Same visibility rule as messages: members (or admins) only — otherwise any
+        # account could enumerate who is in any channel, including DM channels.
+        if not user["is_admin"]:
+            if not conn.execute(
+                "SELECT 1 FROM channel_members WHERE channel_id=? AND user_id=?",
+                (cid, user["id"])).fetchone():
+                raise HTTPException(403, "You are not a member of this channel.")
         rows = conn.execute(
             """SELECT u.id, u.full_name, u.username, cm.via_role FROM users u
                JOIN channel_members cm ON cm.user_id=u.id
@@ -1679,6 +1723,9 @@ async def post_message(cid: int, request: Request, user=Depends(current_user)):
     if not body: raise HTTPException(400, "body required")
     if len(body) > 2000: raise HTTPException(400, "Message too long (max 2000 chars)")
     with db.get_db() as conn:
+        ch = conn.execute("SELECT active FROM channels WHERE id=?", (cid,)).fetchone()
+        if not ch or not ch["active"]:
+            raise HTTPException(404, "Channel not found")  # archived channels are read-only
         if not user["is_admin"]:
             if not conn.execute(
                 "SELECT 1 FROM channel_members WHERE channel_id=? AND user_id=?",

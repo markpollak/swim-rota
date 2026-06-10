@@ -21,7 +21,9 @@ def generate_slots(conn, from_date: date, to_date: date) -> int:
     templates = conn.execute("""
         SELECT t.* FROM templates t
         LEFT JOIN levels l ON l.id = t.level_id
-        WHERE t.active = 1 AND (t.level_id IS NULL OR l.active = 1)
+        JOIN roles ro ON ro.id = t.role_id
+        WHERE t.active = 1 AND ro.active = 1
+        AND (t.level_id IS NULL OR l.active = 1)
     """).fetchall()
     created = 0
     d = from_date
@@ -61,7 +63,9 @@ def generate_from_schedules(conn, from_date: date, to_date: date) -> int:
         FROM class_schedules cs
         LEFT JOIN levels l ON l.id = cs.level_id
         JOIN schedule_staff ss ON ss.schedule_id = cs.id
-        WHERE cs.active = 1 AND (cs.level_id IS NULL OR l.active = 1)
+        JOIN roles ro ON ro.id = ss.role_id
+        WHERE cs.active = 1 AND ro.active = 1
+        AND (cs.level_id IS NULL OR l.active = 1)
     """).fetchall()
 
     created = 0
@@ -127,9 +131,13 @@ def generate_from_schedules(conn, from_date: date, to_date: date) -> int:
     return created
 
 
-def extend_to_horizon(conn, weeks: int = 26) -> int:
-    """Ensure slots exist for the next `weeks` weeks (~6 months). Idempotent."""
-    today = date.today()
+def extend_to_horizon(conn, weeks: int = 26, today: date = None) -> int:
+    """Ensure slots exist for the next `weeks` weeks (~6 months). Idempotent.
+
+    Pass `today` evaluated in the app's configured timezone (the caller knows it;
+    this module doesn't) so the window doesn't drift around midnight UTC.
+    """
+    today = today or date.today()
     horizon = today + timedelta(weeks=weeks)
     # Quick check: skip only if the *schedule/template-generated* slots already reach
     # the horizon. Ad-hoc one-offs and soft-deleted tombstones are excluded, so a

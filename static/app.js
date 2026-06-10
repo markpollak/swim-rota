@@ -1840,7 +1840,7 @@ function buildRotaGrid(roleSlots, times, weekStart, allView = false, allRoles = 
         const label = taken
           ? `${roleBadge}${esc(name || s.status)} <span class="rg-lvl">${esc(lvl)}</span>`
           : `${roleBadge}<span class="rg-lvl">${esc(lvl)}</span>`;
-        return `<div class="rb-cell ${cls}${allView ? "" : ""}" data-sid="${s.id}"${taken ? ` data-taken="1"` : ""} title="${taken ? (name || s.status) + " · " : ""}${role ? role.name + " · " : ""}${s.level_name || "Pool duty"}" style="margin-bottom:2px">${label}</div>`;
+        return `<div class="rb-cell ${cls}${allView ? "" : ""}" data-sid="${s.id}"${taken ? ` data-taken="1"` : ""} title="${esc(taken ? (name || s.status) + " · " : "")}${esc(role ? role.name + " · " : "")}${esc(s.level_name || "Pool duty")}" style="margin-bottom:2px">${label}</div>`;
       }).join("")}</td>`;
     }).join("");
     return `<tr><td class="rg-time">${time}</td>${cells}</tr>`;

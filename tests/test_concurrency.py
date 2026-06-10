@@ -463,3 +463,59 @@ def test_deactivating_user_releases_future_shifts():
             "INSERT INTO slots (date,start_time,end_time,role_id,status) VALUES (?,?,?,?, 'open')",
             (FUTURE, "14:00", "14:30", role)).lastrowid
     assert _api("POST", f"/api/slots/{s_new}/assign", atok, {"user_id": uid})[0] == 400
+
+
+# ===================================== Review 5: channel visibility + archived channels
+def test_channel_members_visible_to_members_only_and_archived_readonly():
+    role = _seed_base()
+    admin = _make_admin("boss10", "rightpass1"); atok = auth.make_token(admin)
+    u1, u2 = _make_users(role, 2)
+    t1, t2 = auth.make_token(u1), auth.make_token(u2)
+
+    code, ch = _api("POST", "/api/channels", atok,
+                    {"name": f"r5-test-{PORT}", "member_ids": [u1]})
+    assert code == 200
+    cid = ch["id"]
+
+    assert _api("GET", f"/api/channels/{cid}/members", t1)[0] == 200   # member
+    assert _api("GET", f"/api/channels/{cid}/members", t2)[0] == 403   # not a member
+    assert _api("GET", f"/api/channels/{cid}/members", atok)[0] == 200  # admin
+
+    # Archive the channel → posting is rejected for everyone
+    assert _api("DELETE", f"/api/channels/{cid}", atok)[0] == 200
+    assert _api("POST", f"/api/channels/{cid}/messages", t1, {"body": "hi"})[0] == 404
+    assert _api("POST", f"/api/channels/{cid}/messages", atok, {"body": "hi"})[0] == 404
+
+
+# ===================================== Review 5: inactive roles stop generating
+def test_inactive_role_not_generated():
+    role = _seed_base()
+    admin = _make_admin("boss11", "rightpass1"); atok = auth.make_token(admin)
+
+    code, _ = _api("PUT", "/api/class-schedules/level/duty", atok,
+                   {"sessions": [{"weekday": wd, "start_time": "09:00", "end_time": "09:30",
+                                  "role_id": role, "count": 1} for wd in range(7)]})
+    assert code == 200
+
+    def role_slot_count():
+        with db.get_db() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) c FROM slots WHERE role_id=? AND deleted_at IS NULL",
+                (role,)).fetchone()["c"]
+
+    assert _api("PATCH", f"/api/roles/{role}", atok, {"active": False})[0] == 200
+    _api("POST", "/api/generate", atok, {"weeks": 2})
+    assert role_slot_count() == 0, "inactive role must not generate shifts"
+
+    assert _api("PATCH", f"/api/roles/{role}", atok, {"active": True})[0] == 200
+    _api("POST", "/api/generate", atok, {"weeks": 2})
+    assert role_slot_count() > 0, "reactivated role should generate again"
+
+
+# ===================================== Review 5: training_expiry format validated
+def test_training_expiry_validation():
+    role = _seed_base()
+    (uid,) = _make_users(role, 1)
+    tok = auth.make_token(uid)
+    assert _api("PATCH", "/api/me", tok, {"training_expiry": "31/12/2026"})[0] == 400
+    assert _api("PATCH", "/api/me", tok, {"training_expiry": "2026-12-31"})[0] == 200

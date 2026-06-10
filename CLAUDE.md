@@ -91,7 +91,7 @@ in `static/sw.js` (the `activate` handler clears the old shell). That's the only
 place to change — `index.html` and the `SHELL` list use plain paths, so versions
 can no longer drift out of sync.
 
-Current version: **v50** — increment on next static change.
+Current version: **v62** — increment on next static change.
 
 ---
 
